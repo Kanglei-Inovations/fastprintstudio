@@ -1882,6 +1882,17 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     }
   }
 
+  static Uint8List _toGrayscale(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      final gray = img.grayscale(decoded);
+      return Uint8List.fromList(img.encodePng(gray));
+    } catch (_) {
+      return bytes;
+    }
+  }
+
   void _recalculateLayout() {
     List<IdCardEntry> cardList = List.from(state.cards);
 
@@ -1911,12 +1922,20 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       return;
     }
 
+    // Apply Black & White / Grayscale conversion when color mode is B&W
+    final effectiveCards = state.isBlackAndWhite
+        ? cardList.map((c) => c.copyWith(
+            frontBytes: c.frontBytes != null ? _toGrayscale(c.frontBytes!) : null,
+            backBytes: c.backBytes != null ? _toGrayscale(c.backBytes!) : null,
+          )).toList()
+        : cardList;
+
     List<PrintLayout> layouts;
     PrintLayout? backLayout;
 
     if (state.workflowType == IdCardWorkflowType.epsonL805) {
       layouts = LayoutEngine.calculateMultiL805TrayLayoutPages(
-        cards: cardList,
+        cards: effectiveCards,
         cardsPerTray: 2,
         calibration: state.l805Calibration,
       );
@@ -1924,9 +1943,9 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         backLayout = layouts[1];
       }
     } else if (state.workflowType == IdCardWorkflowType.dragonSheet) {
-      final autoDuplex = cardList.any((c) => c.hasBothSides && c.backBytes != null);
+      final autoDuplex = effectiveCards.any((c) => c.hasBothSides && c.backBytes != null);
       layouts = LayoutEngine.calculateMultiDragonSheetLayoutPages(
-        cards: cardList,
+        cards: effectiveCards,
         isDuplex: autoDuplex,
         marginMm: state.marginMm,
         spacingMm: state.gapMm,
@@ -1936,7 +1955,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       layouts = LayoutEngine.calculateMultiXeroxLayoutPages(
         paperPreset: state.paperPreset,
         idPreset: state.idCardPreset,
-        cards: cardList,
+        cards: effectiveCards,
         orientation: state.orientation,
         marginMm: state.marginMm,
         gapMm: state.gapMm,
@@ -1946,7 +1965,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       layouts = LayoutEngine.calculateMultiIdCardLayoutPages(
         paperPreset: state.paperPreset,
         idPreset: state.idCardPreset,
-        cards: cardList,
+        cards: effectiveCards,
         orientation: state.orientation,
         marginMm: state.marginMm,
         gapMm: state.gapMm,
@@ -2072,6 +2091,19 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     _reprocess();
   }
 
+  /// Sets Color vs Black & White mode for ID card printing
+  void setColorMode({required bool isBlackAndWhite}) {
+    if (state.isBlackAndWhite == isBlackAndWhite) return;
+    _pushUndo();
+    state = state.copyWith(isBlackAndWhite: isBlackAndWhite);
+    _recalculateLayout();
+  }
+
+  /// Toggles between Color and Black & White mode
+  void toggleColorMode() {
+    setColorMode(isBlackAndWhite: !state.isBlackAndWhite);
+  }
+
   void undo() {
     if (!state.canUndo) return;
     final last = state.undoStack.last;
@@ -2091,6 +2123,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       pvcMode: state.pvcMode,
       l805CardQuantity: state.l805CardQuantity,
       l805PreviewFront: state.l805PreviewFront,
+      isBlackAndWhite: state.isBlackAndWhite,
     );
 
     state = state.copyWith(
@@ -2111,6 +2144,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       pvcMode: last.pvcMode,
       l805CardQuantity: last.l805CardQuantity,
       l805PreviewFront: last.l805PreviewFront,
+      isBlackAndWhite: last.isBlackAndWhite,
     );
 
     _reprocess();
@@ -2137,6 +2171,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       pvcMode: state.pvcMode,
       l805CardQuantity: state.l805CardQuantity,
       l805PreviewFront: state.l805PreviewFront,
+      isBlackAndWhite: state.isBlackAndWhite,
     );
     final newUndo = [...state.undoStack, currentSnapshot];
 
@@ -2158,6 +2193,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       pvcMode: next.pvcMode,
       l805CardQuantity: next.l805CardQuantity,
       l805PreviewFront: next.l805PreviewFront,
+      isBlackAndWhite: next.isBlackAndWhite,
     );
 
     _reprocess();
@@ -2171,17 +2207,18 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
 
     final printerService = _ref.read(printerServiceProvider);
     final totalPages = layouts.length;
+    final colorSuffix = state.isBlackAndWhite ? ' (B&W)' : ' (Color)';
 
     final success = totalPages > 1
         ? await printerService.printMultiLayout(
             layouts,
             printer: targetPrinter,
-            jobName: '${state.idCardPreset.name} ($totalPages Pages)',
+            jobName: '${state.idCardPreset.name}$colorSuffix ($totalPages Pages)',
           )
         : await printerService.printLayout(
             layouts.first,
             printer: targetPrinter,
-            jobName: '${state.idCardPreset.name} (Print)',
+            jobName: '${state.idCardPreset.name}$colorSuffix (Print)',
           );
 
     final totalCards = state.totalCardsCount;
@@ -2190,12 +2227,12 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
             id: _uuid.v4(),
             timestamp: DateTime.now(),
             serviceName: state.workflowType == IdCardWorkflowType.epsonL805
-                ? 'Epson L805 Card Print'
+                ? 'Epson L805 Card Print$colorSuffix'
                 : (state.workflowType == IdCardWorkflowType.dragonSheet
-                    ? 'Dragon Sheet PVC Print'
+                    ? 'Dragon Sheet PVC Print$colorSuffix'
                     : (state.workflowType == IdCardWorkflowType.xerox
-                        ? 'ID Card Xerox Print'
-                        : state.idCardPreset.name)),
+                        ? 'ID Card Xerox$colorSuffix Print'
+                        : '${state.idCardPreset.name}$colorSuffix')),
             paperName: '${state.paperPreset.name} ($totalPages Page${totalPages > 1 ? 's' : ''})',
             copiesCount: totalCards * state.printJobCopies,
             printerName: targetPrinter?.name ?? 'System Print Dialog',
@@ -2276,6 +2313,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       'pvcModeName': state.pvcMode.name,
       'l805CardQuantity': state.l805CardQuantity,
       'l805PreviewFront': state.l805PreviewFront,
+      'isBlackAndWhite': state.isBlackAndWhite,
     };
 
     await DraftStorageService.saveIdCardDraft(
@@ -2295,6 +2333,11 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     await loadDocument(bytes: bytes, fileName: fileName, isPdf: isPdf, isRestoringDraft: true);
 
     try {
+      final isBw = metadata['isBlackAndWhite'] as bool?;
+      if (isBw != null) {
+        state = state.copyWith(isBlackAndWhite: isBw);
+      }
+
       final presetId = metadata['idCardPresetId'] as String?;
       if (presetId != null) {
         final preset = StandardIDCardPresets.all.where((p) => p.id == presetId).firstOrNull;
@@ -2447,6 +2490,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       'pvcModeName': state.pvcMode.name,
       'l805CardQuantity': state.l805CardQuantity,
       'l805PreviewFront': state.l805PreviewFront,
+      'isBlackAndWhite': state.isBlackAndWhite,
     };
 
     final thumb = state.processedFrontBytes ?? state.processedBackBytes ?? state.activePageImageBytes;
@@ -2512,6 +2556,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
           'pvcModeName': state.pvcMode.name,
           'l805CardQuantity': state.l805CardQuantity,
           'l805PreviewFront': state.l805PreviewFront,
+          'isBlackAndWhite': state.isBlackAndWhite,
         };
 
         await RecentProjectsService.addProject(

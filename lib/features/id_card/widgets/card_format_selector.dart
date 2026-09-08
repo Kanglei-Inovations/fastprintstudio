@@ -10,6 +10,7 @@ class CardFormatSelector extends StatelessWidget {
   final IdCardWorkflowType workflowType;
   final ValueChanged<IdCardWorkflowType> onSelectWorkflow;
   final VoidCallback? onOpenCalibration;
+  final bool isBlackAndWhite;
 
   const CardFormatSelector({
     super.key,
@@ -19,6 +20,7 @@ class CardFormatSelector extends StatelessWidget {
     required this.workflowType,
     required this.onSelectWorkflow,
     this.onOpenCalibration,
+    this.isBlackAndWhite = false,
   });
 
   @override
@@ -111,8 +113,8 @@ class CardFormatSelector extends StatelessWidget {
                   child: _buildWorkflowCard(
                     type: IdCardWorkflowType.xerox,
                     title: 'Xerox',
-                    price: '₹10',
-                    subtitle: 'Paper Copy',
+                    price: isBlackAndWhite ? '₹5' : '₹10',
+                    subtitle: isBlackAndWhite ? 'B&W Paper' : 'Color Paper',
                     icon: Icons.copy_rounded,
                     accentColor: palette.teal,
                     isSelected: workflowType == IdCardWorkflowType.xerox,
