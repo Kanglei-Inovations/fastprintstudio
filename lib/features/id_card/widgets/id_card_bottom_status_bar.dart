@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:printing/printing.dart';
-import '../../../core/models/paper_preset.dart';
 import '../../../providers/id_card_provider.dart';
 
 class IdCardBottomStatusBar extends StatelessWidget {
@@ -16,7 +15,7 @@ class IdCardBottomStatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final printerName = currentPrinter?.name ?? 'Default Printer';
-    final paperText = '${state.paperPreset.name} (${state.orientation == PaperOrientation.portrait ? "Portrait" : "Landscape"})';
+    final paperText = state.paperPreset.name;
     final modeText = state.workflowType.label;
 
     return Container(
@@ -57,6 +56,17 @@ class IdCardBottomStatusBar extends StatelessWidget {
                   const SizedBox(width: 6),
                   Text(
                     'Copies: ${state.printJobCopies}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1)),
+                  ),
+                  const SizedBox(width: 16),
+                  _DividerDot(),
+                  const SizedBox(width: 16),
+
+                  // File(s) Count
+                  const Icon(Icons.insert_drive_file_outlined, size: 13, color: Color(0xFF94A3B8)),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${state.totalFilesCount > 1 ? "Files" : "File"}: ${state.totalFilesCount}',
                     style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1)),
                   ),
                   const SizedBox(width: 16),

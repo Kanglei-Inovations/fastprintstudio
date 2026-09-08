@@ -42,17 +42,45 @@ class ImageProcessor {
 
   /// Crops an image based on normalized CropRectData
   static img.Image cropNormalized(img.Image source, CropRectData cropData) {
+    return cropNormalizedWithOrientedReference(
+      source: source,
+      cropData: cropData,
+      orientedWidth: source.width,
+      orientedHeight: source.height,
+    );
+  }
+
+  /// Canonical Crop Coordinate Contract:
+  /// Crops an image based on normalized CropRectData, accounting for fine rotation canvas expansion.
+  /// [orientedWidth] and [orientedHeight] represent the dimensions of the base oriented image
+  /// (after 90-degree step rotation, before arbitrary fine rotation), which corresponds exactly
+  /// to the coordinate space seen by the user in CropEditorModal.
+  static img.Image cropNormalizedWithOrientedReference({
+    required img.Image source,
+    required CropRectData cropData,
+    required int orientedWidth,
+    required int orientedHeight,
+  }) {
+    // Center delta caused by fine rotation expansion in image library
+    final deltaX = (source.width - orientedWidth) / 2.0;
+    final deltaY = (source.height - orientedHeight) / 2.0;
+
     if (cropData.isQuad) {
-      // Map normalized quad points to pixel space
       final quad = QuadPoints(
-        topLeft: Offset(cropData.quadPoints!.topLeft.dx * source.width, cropData.quadPoints!.topLeft.dy * source.height),
-        topRight: Offset(cropData.quadPoints!.topRight.dx * source.width, cropData.quadPoints!.topRight.dy * source.height),
-        bottomRight: Offset(cropData.quadPoints!.bottomRight.dx * source.width, cropData.quadPoints!.bottomRight.dy * source.height),
-        bottomLeft: Offset(cropData.quadPoints!.bottomLeft.dx * source.width, cropData.quadPoints!.bottomLeft.dy * source.height),
+        topLeft: Offset((cropData.quadPoints!.topLeft.dx * orientedWidth) + deltaX, (cropData.quadPoints!.topLeft.dy * orientedHeight) + deltaY),
+        topRight: Offset((cropData.quadPoints!.topRight.dx * orientedWidth) + deltaX, (cropData.quadPoints!.topRight.dy * orientedHeight) + deltaY),
+        bottomRight: Offset((cropData.quadPoints!.bottomRight.dx * orientedWidth) + deltaX, (cropData.quadPoints!.bottomRight.dy * orientedHeight) + deltaY),
+        bottomLeft: Offset((cropData.quadPoints!.bottomLeft.dx * orientedWidth) + deltaX, (cropData.quadPoints!.bottomLeft.dy * orientedHeight) + deltaY),
       );
       return warpPerspective(source, quad, targetAspectRatio: cropData.aspectRatio);
     }
-    final pixelRect = cropData.toPixelRect(source.width, source.height);
+
+    final left = (cropData.left * orientedWidth) + deltaX;
+    final top = (cropData.top * orientedHeight) + deltaY;
+    final width = cropData.width * orientedWidth;
+    final height = cropData.height * orientedHeight;
+
+    final pixelRect = Rect.fromLTWH(left, top, width, height);
     return cropPixelRect(source, pixelRect);
   }
 
@@ -394,7 +422,15 @@ class ImageProcessor {
     return canvas;
   }
 
-  /// Full end-to-end Photo pipeline (Crop -> Enhance -> Resize -> Borders -> PNG)
+  /// Full end-to-end Photo pipeline obeying the Canonical Coordinate & Transform Contract:
+  /// 1. Decode original bytes -> [original]
+  /// 2. 90-degree step rotation (0, 90, 180, 270) -> [working] with base oriented dimensions (W_oriented, H_oriented)
+  /// 3. Fine angle rotation (arbitrary degrees) -> [working] with expanded dimensions (W_fine, H_fine)
+  /// 4. Center-aligned normalized crop or perspective-warp using oriented dimensions reference
+  /// 5. Resize to exact physical dimensions at given effective DPI
+  /// 6. Enhancements (brightness, contrast, saturation, sharpness, smooth skin)
+  /// 7. Physical borders (outer margin + cutting stroke)
+  /// 8. Encode to PNG/JPEG
   static Uint8List processPhoto({
     required Uint8List sourceBytes,
     required CropRectData cropData,
@@ -411,24 +447,43 @@ class ImageProcessor {
     if (cropData.rotationDegrees != 0) {
       working = rotate(working, cropData.rotationDegrees.round());
     }
+
+    // Step 2 result: base oriented dimensions matching CropEditorModal active coordinate space
+    final orientedW = working.width;
+    final orientedH = working.height;
+
+    // Step 3: fine angle rotation
     if (cropData.fineAngleDegrees.abs() > 0.01) {
       working = rotateArbitrary(working, cropData.fineAngleDegrees);
     }
 
-    final cropped = cropNormalized(working, cropData);
+    // Step 4: center-aligned crop
+    final cropped = cropNormalizedWithOrientedReference(
+      source: working,
+      cropData: cropData,
+      orientedWidth: orientedW,
+      orientedHeight: orientedH,
+    );
+
+    // Step 5: resize to physical dimensions
     final resized = resizeToPhysical(
       cropped,
       targetWidthMm: targetWidthMm,
       targetHeightMm: targetHeightMm,
       dpi: dpi,
     );
+
+    // Step 6: enhancements
     final enhanced = adjustEnhancements(resized, enhancement);
+
+    // Step 7: borders
     final bordered = applyBorders(
       enhanced,
       borderConfig: borderConfig,
       dpi: dpi,
     );
 
+    // Step 8: encode
     if (bordered.hasAlpha) {
       return encodePng(bordered);
     } else {
@@ -436,7 +491,8 @@ class ImageProcessor {
     }
   }
 
-  /// Crops or warps an exact pixel region/quad from an image and returns a CropResult
+  /// Crops or warps an exact pixel region/quad from an image and returns a CropResult.
+  /// Obeying the canonical contract with oriented dimension tracking.
   static CropResult extractCropResult({
     required Uint8List sourceBytes,
     required Rect sourcePixelRect,
@@ -464,19 +520,38 @@ class ImageProcessor {
     if (rotationDegrees != 0) {
       image = rotate(image, rotationDegrees);
     }
+
+    final orientedW = image.width;
+    final orientedH = image.height;
+
     if (fineAngleDegrees.abs() > 0.01) {
       image = rotateArbitrary(image, fineAngleDegrees);
     }
 
+    final deltaX = (image.width - orientedW) / 2.0;
+    final deltaY = (image.height - orientedH) / 2.0;
+
     img.Image outputImage;
     if (quadPoints != null) {
+      final shiftedQuad = QuadPoints(
+        topLeft: Offset(quadPoints.topLeft.dx + deltaX, quadPoints.topLeft.dy + deltaY),
+        topRight: Offset(quadPoints.topRight.dx + deltaX, quadPoints.topRight.dy + deltaY),
+        bottomRight: Offset(quadPoints.bottomRight.dx + deltaX, quadPoints.bottomRight.dy + deltaY),
+        bottomLeft: Offset(quadPoints.bottomLeft.dx + deltaX, quadPoints.bottomLeft.dy + deltaY),
+      );
       outputImage = warpPerspective(
         image,
-        quadPoints,
+        shiftedQuad,
         targetAspectRatio: targetAspectRatio,
       );
     } else {
-      outputImage = cropPixelRect(image, sourcePixelRect);
+      final shiftedRect = Rect.fromLTWH(
+        sourcePixelRect.left + deltaX,
+        sourcePixelRect.top + deltaY,
+        sourcePixelRect.width,
+        sourcePixelRect.height,
+      );
+      outputImage = cropPixelRect(image, shiftedRect);
     }
 
     if (enhancement != null && !enhancement.isDefault) {
@@ -489,8 +564,8 @@ class ImageProcessor {
       sourceRect: sourcePixelRect,
       quadPoints: quadPoints,
       croppedBytes: pngBytes,
-      sourceWidth: image.width,
-      sourceHeight: image.height,
+      sourceWidth: orientedW,
+      sourceHeight: orientedH,
       rotationDegrees: rotationDegrees,
       fineAngleDegrees: fineAngleDegrees,
       targetAspectRatio: targetAspectRatio,

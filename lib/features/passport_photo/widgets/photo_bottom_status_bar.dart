@@ -75,6 +75,17 @@ class PhotoBottomStatusBar extends StatelessWidget {
                   _DividerDot(),
                   const SizedBox(width: 16),
 
+                  // File(s) Count
+                  const Icon(Icons.insert_drive_file_outlined, size: 13, color: Color(0xFF94A3B8)),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${state.totalFilesCount > 1 ? "Files" : "File"}: ${state.totalFilesCount}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1)),
+                  ),
+                  const SizedBox(width: 16),
+                  _DividerDot(),
+                  const SizedBox(width: 16),
+
                   // Packed Photos
                   const Icon(Icons.portrait_rounded, size: 13, color: Color(0xFF94A3B8)),
                   const SizedBox(width: 6),

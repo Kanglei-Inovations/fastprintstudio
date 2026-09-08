@@ -4,11 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
+import '../../core/constants/id_card_presets.dart';
 import '../../core/models/crop_rect_data.dart';
 import '../../core/models/crop_result.dart';
 import '../../core/models/enhancement_config.dart';
+import '../../core/models/id_card_preset.dart';
 import '../../core/models/quad_points.dart';
 import '../../core/utils/coordinate_converter.dart';
+import '../../services/detection/document_detector.dart';
 import '../../services/image/image_processor.dart';
 
 enum CropMode {
@@ -24,6 +27,7 @@ class CropEditorModal extends StatefulWidget {
   final bool showDebugInfo;
   final EnhancementConfig? initialEnhancement;
   final bool initialBgRemoverMode;
+  final IDCardPreset? idCardPreset;
 
   const CropEditorModal({
     super.key,
@@ -34,6 +38,7 @@ class CropEditorModal extends StatefulWidget {
     this.showDebugInfo = kDebugMode,
     this.initialEnhancement,
     this.initialBgRemoverMode = false,
+    this.idCardPreset,
   });
 
   /// Displays the modal and returns the definitive CropResult containing source pixel coordinates and cropped/unskewed bytes.
@@ -45,6 +50,7 @@ class CropEditorModal extends StatefulWidget {
     String title = 'Edit Image',
     EnhancementConfig? initialEnhancement,
     bool initialBgRemoverMode = false,
+    IDCardPreset? idCardPreset,
   }) {
     return showDialog<CropResult>(
       context: context,
@@ -56,6 +62,7 @@ class CropEditorModal extends StatefulWidget {
         title: title,
         initialEnhancement: initialEnhancement,
         initialBgRemoverMode: initialBgRemoverMode,
+        idCardPreset: idCardPreset,
       ),
     );
   }
@@ -241,6 +248,67 @@ class _CropEditorModalState extends State<CropEditorModal> {
       _zoomScale = 1.0;
       _panOffset = Offset.zero;
     });
+  }
+
+  bool _isAutoDetecting = false;
+
+  Future<void> _runAutoDetect() async {
+    if (_origWidth <= 0 || _origHeight <= 0) return;
+    setState(() => _isAutoDetecting = true);
+    try {
+      final preset = widget.idCardPreset ?? StandardIDCardPresets.aadhaar;
+      final detection = await DocumentDetector.detectIDCard(
+        imageBytes: widget.imageBytes,
+        preset: preset,
+      );
+
+      final isBack = widget.title.toLowerCase().contains('back');
+      final targetCrop = (isBack && detection.backCrop != null)
+          ? detection.backCrop!
+          : (detection.frontCrop.width < 0.99 || detection.frontCrop.height < 0.99
+              ? detection.frontCrop
+              : (detection.candidates.isNotEmpty ? detection.candidates.first.crop : null));
+
+      if (targetCrop != null && _origWidth > 0 && _origHeight > 0) {
+        setState(() {
+          _sourcePixelCrop = targetCrop.toPixelRect(_origWidth, _origHeight);
+          if (targetCrop.quadPoints != null) {
+            _cropMode = CropMode.quadPerspective;
+            _sourceQuad = targetCrop.quadPoints!;
+          } else {
+            _sourceQuad = QuadPoints.fromRect(_sourcePixelCrop);
+          }
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Card detected successfully! You can fine-tune handles or click Apply.'),
+              backgroundColor: Color(0xFF16A34A),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No card detected automatically. Please adjust the crop boundaries manually.'),
+              backgroundColor: Color(0xFFEAB308),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Auto detect in crop modal error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isAutoDetecting = false);
+      }
+    }
   }
 
   void _zoomIn() {
@@ -808,6 +876,27 @@ class _CropEditorModalState extends State<CropEditorModal> {
                     label: const Text('Reset Crop & Angle', style: TextStyle(fontSize: 12)),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  ElevatedButton.icon(
+                    onPressed: _isAutoDetecting ? null : _runAutoDetect,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF59E0B),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      elevation: 0,
+                    ),
+                    icon: _isAutoDetecting
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.auto_awesome, size: 16),
+                    label: Text(
+                      _isAutoDetecting ? 'Detecting...' : 'Auto Detect',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
                     ),
                   ),
 

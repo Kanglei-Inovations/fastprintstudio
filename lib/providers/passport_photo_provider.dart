@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import '../core/utils/unit_converter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image/image.dart' as img;
 import 'package:printing/printing.dart';
 import 'package:uuid/uuid.dart';
 import '../core/constants/paper_presets.dart';
@@ -68,6 +67,7 @@ class PassportPhotoStateSnapshot {
   final String? backgroundColorHex;
   final Uint8List? originalRawImageBytes;
   final bool isBgRemoved;
+  final int activeSheetIndex;
 
   PassportPhotoStateSnapshot({
     required this.groups,
@@ -86,6 +86,7 @@ class PassportPhotoStateSnapshot {
     this.backgroundColorHex,
     this.originalRawImageBytes,
     this.isBgRemoved = false,
+    this.activeSheetIndex = 0,
   });
 }
 
@@ -163,6 +164,20 @@ class PassportPhotoState {
   }
 
   int get totalCopiesCount => groups.fold<int>(0, (sum, g) => sum + g.copiesCount);
+
+  int get totalFilesCount {
+    if (!hasImage && groups.isEmpty) return 0;
+    final uniqueImages = <Uint8List>{};
+    if (rawImageBytes != null && rawImageBytes!.isNotEmpty) {
+      uniqueImages.add(rawImageBytes!);
+    }
+    for (final g in groups) {
+      if (g.rawImageBytes != null && g.rawImageBytes!.isNotEmpty) {
+        uniqueImages.add(g.rawImageBytes!);
+      }
+    }
+    return uniqueImages.isNotEmpty ? uniqueImages.length : (hasImage ? 1 : 0);
+  }
 
   int get totalSheetsRequired {
     if (currentLayouts.isNotEmpty) {
@@ -300,7 +315,8 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
   final Ref _ref;
   static const _uuid = Uuid();
   Timer? _draftDebounceTimer;
-  final Map<String, PhotoGroup> _cachedPresetGroups = {};
+  int _asyncOperationGeneration = 0;
+  final Map<String, Uint8List> _processedImageCache = {};
 
   PassportPhotoNotifier(this._ref) : super(const PassportPhotoState());
 
@@ -315,6 +331,41 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     _draftDebounceTimer = Timer(const Duration(milliseconds: 600), () {
       saveDraft();
     });
+  }
+
+  String _buildCacheKey({
+    required Uint8List rawBytes,
+    required String presetId,
+    required CropRectData cropData,
+    required EnhancementConfig enhancement,
+    required BorderConfig borderConfig,
+    required double targetWidthMm,
+    required double targetHeightMm,
+    required int dpi,
+  }) {
+    int byteHash = rawBytes.length;
+    final sampleLen = math.min(rawBytes.length, 32);
+    for (int i = 0; i < sampleLen; i++) {
+      byteHash = (byteHash * 31 + rawBytes[i]) & 0x7FFFFFFF;
+      byteHash = (byteHash * 31 + rawBytes[rawBytes.length - 1 - i]) & 0x7FFFFFFF;
+    }
+
+    return '$byteHash:$presetId:'
+        '${cropData.left.toStringAsFixed(4)},${cropData.top.toStringAsFixed(4)},'
+        '${cropData.width.toStringAsFixed(4)},${cropData.height.toStringAsFixed(4)},'
+        'rot=${cropData.rotationDegrees},fine=${cropData.fineAngleDegrees.toStringAsFixed(2)},quad=${cropData.isQuad}:'
+        '${enhancement.brightness.toStringAsFixed(2)},${enhancement.contrast.toStringAsFixed(2)},'
+        '${enhancement.saturation.toStringAsFixed(2)},${enhancement.sharpness.toStringAsFixed(2)},'
+        '${enhancement.smoothSkin.toStringAsFixed(2)}:'
+        '${borderConfig.enabled},${borderConfig.outerBorderMm.toStringAsFixed(2)},${borderConfig.innerBorderMm.toStringAsFixed(2)}:'
+        '${targetWidthMm.toStringAsFixed(1)}x${targetHeightMm.toStringAsFixed(1)}@$dpi';
+  }
+
+  void _cacheProcessedImage(String key, Uint8List bytes) {
+    if (_processedImageCache.length >= 30) {
+      _processedImageCache.remove(_processedImageCache.keys.first);
+    }
+    _processedImageCache[key] = bytes;
   }
 
   void _pushUndo() {
@@ -335,6 +386,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       backgroundColorHex: state.backgroundColorHex,
       originalRawImageBytes: state.originalRawImageBytes,
       isBgRemoved: state.isBgRemoved,
+      activeSheetIndex: state.activeSheetIndex,
     );
     final newUndo = [...state.undoStack, snapshot];
     if (newUndo.length > 20) newUndo.removeAt(0);
@@ -351,8 +403,19 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
           StandardPhotoPresets.a4,
         ];
         for (final preset in presets) {
-          if (_cachedPresetGroups.containsKey(preset.id)) continue;
           final crop = CropRectData.centeredWithAspectRatio(preset.aspectRatio);
+          final cacheKey = _buildCacheKey(
+            rawBytes: imageBytes,
+            presetId: preset.id,
+            cropData: crop,
+            enhancement: state.enhancement,
+            borderConfig: state.borderConfig,
+            targetWidthMm: preset.widthMm,
+            targetHeightMm: preset.heightMm,
+            dpi: 300,
+          );
+          if (_processedImageCache.containsKey(cacheKey)) continue;
+
           final processed = await compute(
             _processGroupPhotoWorker,
             _GroupResizeParams(
@@ -365,17 +428,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
               dpi: 300,
             ),
           );
-          _cachedPresetGroups[preset.id] = PhotoGroup(
-            id: _uuid.v4(),
-            name: preset.name,
-            preset: preset,
-            rawImageBytes: imageBytes,
-            cropData: crop,
-            copiesCount: preset.id == 'stamp' ? 4 : 1,
-            borderConfig: state.borderConfig,
-            enhancement: state.enhancement,
-            processedBytes: processed,
-          );
+          _cacheProcessedImage(cacheKey, processed);
         }
       } catch (e) {
         debugPrint('Prewarm cache error: $e');
@@ -383,37 +436,48 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     });
   }
 
-  /// Retrieves an already processed photo group from cache in 0ms, or builds it once
+  /// Retrieves an already processed photo group from cache in 0ms, or builds it deterministically
   Future<PhotoGroup> _getOrBuildPresetGroup(PhotoPreset preset, int copies) async {
-    // 1. Instant Cache Hit (0ms)
-    final cached = _cachedPresetGroups[preset.id];
-    if (cached != null && cached.processedBytes != null) {
-      return cached.copyWith(copiesCount: copies);
-    }
-
-    // 2. Currently Active Group
+    // 1. If active groups already has this preset, preserve its exact user edits
     final existing = state.groups.where((g) => g.preset.id == preset.id).firstOrNull;
     if (existing != null && existing.processedBytes != null) {
-      final updated = existing.copyWith(copiesCount: copies);
-      _cachedPresetGroups[preset.id] = updated;
-      return updated;
+      return existing.copyWith(copiesCount: copies);
     }
 
-    // 3. Process once and store in cache
+    // 2. Canonical crop for this preset
     final crop = CropRectData.centeredWithAspectRatio(preset.aspectRatio);
-    final processed = await compute(
-      _processGroupPhotoWorker,
-      _GroupResizeParams(
-        rawBytes: state.rawImageBytes!,
-        cropData: crop,
-        targetWidthMm: preset.widthMm,
-        targetHeightMm: preset.heightMm,
-        enhancement: state.enhancement,
-        borderConfig: state.borderConfig,
-        dpi: 300,
-      ),
+    final cacheKey = _buildCacheKey(
+      rawBytes: state.rawImageBytes!,
+      presetId: preset.id,
+      cropData: crop,
+      enhancement: state.enhancement,
+      borderConfig: state.borderConfig,
+      targetWidthMm: preset.widthMm,
+      targetHeightMm: preset.heightMm,
+      dpi: 300,
     );
-    final newGroup = PhotoGroup(
+
+    Uint8List? processed = _processedImageCache[cacheKey];
+    if (processed == null) {
+      final gen = _asyncOperationGeneration;
+      processed = await compute(
+        _processGroupPhotoWorker,
+        _GroupResizeParams(
+          rawBytes: state.rawImageBytes!,
+          cropData: crop,
+          targetWidthMm: preset.widthMm,
+          targetHeightMm: preset.heightMm,
+          enhancement: state.enhancement,
+          borderConfig: state.borderConfig,
+          dpi: 300,
+        ),
+      );
+      if (gen == _asyncOperationGeneration && processed != null) {
+        _cacheProcessedImage(cacheKey, processed);
+      }
+    }
+
+    return PhotoGroup(
       id: _uuid.v4(),
       name: preset.name,
       preset: preset,
@@ -424,8 +488,6 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       enhancement: state.enhancement,
       processedBytes: processed,
     );
-    _cachedPresetGroups[preset.id] = newGroup;
-    return newGroup;
   }
 
   /// Loads customer image and creates initial Passport photo layout with auto 8 copies
@@ -435,6 +497,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     bool isRestoringDraft = false,
     CropResult? initialCropResult,
   }) async {
+    final generation = ++_asyncOperationGeneration;
     state = state.copyWith(
       rawImageBytes: imageBytes,
       originalRawImageBytes: imageBytes,
@@ -446,7 +509,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       clearError: true,
     );
 
-    _cachedPresetGroups.clear();
+    _processedImageCache.clear();
 
     try {
       final CropRectData crop;
@@ -504,6 +567,8 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         );
       }
 
+      if (generation != _asyncOperationGeneration) return;
+
       final initialPassport = PhotoGroup(
         id: _uuid.v4(),
         name: 'Passport Photo',
@@ -516,7 +581,17 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         processedBytes: processedBytes,
       );
 
-      _cachedPresetGroups[StandardPhotoPresets.passport.id] = initialPassport;
+      final cacheKey = _buildCacheKey(
+        rawBytes: imageBytes,
+        presetId: StandardPhotoPresets.passport.id,
+        cropData: crop,
+        enhancement: enhancement,
+        borderConfig: state.borderConfig,
+        targetWidthMm: StandardPhotoPresets.passport.widthMm,
+        targetHeightMm: StandardPhotoPresets.passport.heightMm,
+        dpi: 300,
+      );
+      _cacheProcessedImage(cacheKey, processedBytes);
 
       final layouts = LayoutEngine.calculateMultiPhotoLayoutPages(
         paperPreset: state.paperPreset,
@@ -560,6 +635,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
   Future<void> setPresetMode(PhotoTypePresetMode mode) async {
     if (!state.hasImage) return;
     if (state.presetMode == mode) return;
+    final generation = ++_asyncOperationGeneration;
     final sw = Stopwatch()..start();
     debugPrint('[FastPrint Photo] 🔀 setPresetMode: Switching photo mode to ${mode.name}...');
     _pushUndo();
@@ -581,6 +657,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       if (mode == PhotoTypePresetMode.passportOnly) {
         // 1. Passport Default: 4R, Glossy, Landscape, 8 copies, No Lamination, No Frame (Instant from cache)
         final passportGroup = await _getOrBuildPresetGroup(StandardPhotoPresets.passport, 8);
+        if (generation != _asyncOperationGeneration) return;
         final updatedGroups = [passportGroup];
         final targetPaper = StandardPaperPresets.fourR;
         const targetOrientation = PaperOrientation.landscape;
@@ -614,6 +691,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       } else if (mode == PhotoTypePresetMode.fourRPhoto) {
         // 3. 4R Photo Default: 4R, Matte, Portrait, 1 copy, No Lamination, No Frame (Instant from cache)
         final fourRGroup = await _getOrBuildPresetGroup(StandardPhotoPresets.fourR, 1);
+        if (generation != _asyncOperationGeneration) return;
         final updatedGroups = [fourRGroup];
         final targetPaper = StandardPaperPresets.fourR;
         const targetOrientation = PaperOrientation.portrait;
@@ -648,6 +726,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       } else if (mode == PhotoTypePresetMode.a4Photo) {
         // 4. A4 Photo Default: A4, Matte, Portrait, 1 copy, No Lamination, No Frame (Instant from cache)
         final a4Group = await _getOrBuildPresetGroup(StandardPhotoPresets.a4, 1);
+        if (generation != _asyncOperationGeneration) return;
         final updatedGroups = [a4Group];
         final targetPaper = StandardPaperPresets.a4;
         const targetOrientation = PaperOrientation.portrait;
@@ -683,6 +762,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         // 2. Pass+Stamp Default: 6 Passport copies + 4 Stamp copies on 4R Portrait Glossy (Instant from cache)
         final passportGroup = await _getOrBuildPresetGroup(StandardPhotoPresets.passport, 6);
         final stampGroup = await _getOrBuildPresetGroup(StandardPhotoPresets.stamp, 4);
+        if (generation != _asyncOperationGeneration) return;
 
         final updatedGroups = [passportGroup, stampGroup];
         final targetPaper = StandardPaperPresets.fourR;
@@ -732,6 +812,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
   /// Adds an additional photo group (e.g. Stamp Photo, Visa, etc.) on the same 4R sheet
   Future<void> addPhotoGroup(PhotoPreset preset, {Uint8List? customBytes}) async {
     if (!state.hasImage) return;
+    final generation = ++_asyncOperationGeneration;
     _pushUndo();
     state = state.copyWith(isProcessing: true, clearError: true);
 
@@ -748,6 +829,20 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         targetHeightMm: preset.heightMm,
         borderConfig: state.borderConfig,
       );
+
+      if (generation != _asyncOperationGeneration) return;
+
+      final cacheKey = _buildCacheKey(
+        rawBytes: imageBytes,
+        presetId: preset.id,
+        cropData: crop,
+        enhancement: state.enhancement,
+        borderConfig: state.borderConfig,
+        targetWidthMm: preset.widthMm,
+        targetHeightMm: preset.heightMm,
+        dpi: 300,
+      );
+      _cacheProcessedImage(cacheKey, processedBytes);
 
       final newGroup = PhotoGroup(
         id: _uuid.v4(),
@@ -793,6 +888,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     PhotoPreset? preset,
     int copies = 4,
   }) async {
+    final generation = ++_asyncOperationGeneration;
     final sw = Stopwatch()..start();
     debugPrint('[FastPrint Photo] 👤 addPersonPhoto: Adding person photo "$fileName"...');
     _pushUndo();
@@ -836,7 +932,29 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       );
       debugPrint('[FastPrint Photo] 🖼️ addPersonPhoto: Image resized and enhanced in ${resizeSw.elapsedMilliseconds}ms');
 
-      final personNumber = state.groups.length + 1;
+      if (generation != _asyncOperationGeneration) return;
+
+      final cacheKey = _buildCacheKey(
+        rawBytes: bytes,
+        presetId: activePreset.id,
+        cropData: cropData,
+        enhancement: cropResult.enhancement ?? state.enhancement,
+        borderConfig: state.borderConfig,
+        targetWidthMm: activePreset.widthMm,
+        targetHeightMm: activePreset.heightMm,
+        dpi: 300,
+      );
+      _cacheProcessedImage(cacheKey, processed);
+
+      int personNumber = state.groups.length + 1;
+      final existingNumbers = state.groups.map((g) {
+        final match = RegExp(r'Person\s+(\d+)').firstMatch(g.name);
+        return match != null ? int.tryParse(match.group(1)!) ?? 0 : 0;
+      }).toSet();
+      while (existingNumbers.contains(personNumber)) {
+        personNumber++;
+      }
+
       final newGroup = PhotoGroup(
         id: _uuid.v4(),
         name: 'Person $personNumber (${p.basename(fileName)})',
@@ -977,6 +1095,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
 
   /// Applies definitive CropResult from CropEditorModal for a specific group
   Future<void> applyGroupCropResult(String groupId, CropResult cropResult) async {
+    final generation = ++_asyncOperationGeneration;
     _pushUndo();
     state = state.copyWith(isProcessing: true, clearError: true);
 
@@ -1011,6 +1130,20 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         ),
       );
 
+      if (generation != _asyncOperationGeneration) return;
+
+      final cacheKey = _buildCacheKey(
+        rawBytes: rawBytes,
+        presetId: targetGroup.preset.id,
+        cropData: cropData,
+        enhancement: activeEnhancement,
+        borderConfig: state.borderConfig,
+        targetWidthMm: targetGroup.widthMm,
+        targetHeightMm: targetGroup.heightMm,
+        dpi: 300,
+      );
+      _cacheProcessedImage(cacheKey, processedBytes);
+
       final updatedGroups = state.groups.map((g) {
         if (g.id == groupId) {
           final updated = g.copyWith(
@@ -1018,7 +1151,6 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
             enhancement: activeEnhancement,
             processedBytes: processedBytes,
           );
-          _cachedPresetGroups[g.preset.id] = updated;
           return updated;
         }
         return g;
@@ -1044,7 +1176,6 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       _debouncedSaveDraft();
 
       // Prewarm background cache for other photo presets with new crop/enhancement
-      _cachedPresetGroups.removeWhere((key, _) => key != targetGroup.preset.id);
       _prewarmPresetCache(rawBytes);
     } catch (e) {
       debugPrint('Error applying group crop: $e');
@@ -1095,18 +1226,35 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
 
   Future<void> _reprocessAllGroups() async {
     if (!state.hasImage) return;
-    _cachedPresetGroups.clear();
+    final generation = ++_asyncOperationGeneration;
+    _processedImageCache.clear();
 
     final updatedGroups = <PhotoGroup>[];
     for (final group in state.groups) {
+      final rawBytes = group.rawImageBytes ?? state.rawImageBytes!;
       final processedBytes = await ImageProcessor.processPhotoAsync(
-        sourceBytes: group.rawImageBytes ?? state.rawImageBytes!,
+        sourceBytes: rawBytes,
         cropData: group.cropData,
         enhancement: state.enhancement,
         targetWidthMm: group.widthMm,
         targetHeightMm: group.heightMm,
         borderConfig: state.borderConfig,
       );
+
+      if (generation != _asyncOperationGeneration) return;
+
+      final cacheKey = _buildCacheKey(
+        rawBytes: rawBytes,
+        presetId: group.preset.id,
+        cropData: group.cropData,
+        enhancement: state.enhancement,
+        borderConfig: state.borderConfig,
+        targetWidthMm: group.widthMm,
+        targetHeightMm: group.heightMm,
+        dpi: 300,
+      );
+      _cacheProcessedImage(cacheKey, processedBytes);
+
       updatedGroups.add(
         group.copyWith(
           enhancement: state.enhancement,
@@ -1129,6 +1277,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       groups: updatedGroups,
       currentLayouts: layouts,
       currentLayout: layouts.firstOrNull,
+      activeSheetIndex: state.activeSheetIndex.clamp(0, layouts.isEmpty ? 0 : layouts.length - 1),
     );
   }
 
@@ -1228,10 +1377,11 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       backgroundColorHex: state.backgroundColorHex,
       originalRawImageBytes: state.originalRawImageBytes,
       isBgRemoved: state.isBgRemoved,
+      activeSheetIndex: state.activeSheetIndex,
     );
     final newRedo = [...state.redoStack, currentSnapshot];
 
-    final layout = LayoutEngine.calculateMultiPhotoLayout(
+    final layouts = LayoutEngine.calculateMultiPhotoLayoutPages(
       paperPreset: last.paperPreset,
       groups: last.groups,
       orientation: last.orientation,
@@ -1239,6 +1389,8 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       marginMm: last.marginMm,
       scaling: last.photoScaling,
     );
+
+    final restoredActiveIndex = last.activeSheetIndex.clamp(0, layouts.isEmpty ? 0 : layouts.length - 1);
 
     state = state.copyWith(
       undoStack: newUndo,
@@ -1260,8 +1412,11 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       clearBackgroundColor: last.backgroundColorHex == null,
       originalRawImageBytes: last.originalRawImageBytes,
       isBgRemoved: last.isBgRemoved,
-      currentLayout: layout,
+      currentLayouts: layouts,
+      currentLayout: layouts.isNotEmpty ? layouts[restoredActiveIndex] : null,
+      activeSheetIndex: restoredActiveIndex,
     );
+    _debouncedSaveDraft();
   }
 
   void redo() {
@@ -1286,10 +1441,11 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       backgroundColorHex: state.backgroundColorHex,
       originalRawImageBytes: state.originalRawImageBytes,
       isBgRemoved: state.isBgRemoved,
+      activeSheetIndex: state.activeSheetIndex,
     );
     final newUndo = [...state.undoStack, currentSnapshot];
 
-    final layout = LayoutEngine.calculateMultiPhotoLayout(
+    final layouts = LayoutEngine.calculateMultiPhotoLayoutPages(
       paperPreset: next.paperPreset,
       groups: next.groups,
       orientation: next.orientation,
@@ -1297,6 +1453,8 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       marginMm: next.marginMm,
       scaling: next.photoScaling,
     );
+
+    final restoredActiveIndex = next.activeSheetIndex.clamp(0, layouts.isEmpty ? 0 : layouts.length - 1);
 
     state = state.copyWith(
       undoStack: newUndo,
@@ -1318,8 +1476,11 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       clearBackgroundColor: next.backgroundColorHex == null,
       originalRawImageBytes: next.originalRawImageBytes,
       isBgRemoved: next.isBgRemoved,
-      currentLayout: layout,
+      currentLayouts: layouts,
+      currentLayout: layouts.isNotEmpty ? layouts[restoredActiveIndex] : null,
+      activeSheetIndex: restoredActiveIndex,
     );
+    _debouncedSaveDraft();
   }
 
   void setPhotoFinish(PhotoFinish finish) {
@@ -1355,6 +1516,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     final baseImage = state.originalRawImageBytes ?? state.rawImageBytes;
     if (baseImage == null || baseImage.isEmpty) return;
 
+    final generation = ++_asyncOperationGeneration;
     _pushUndo();
     state = state.copyWith(isProcessing: true, clearError: true);
 
@@ -1378,25 +1540,43 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         ),
       );
 
+      if (generation != _asyncOperationGeneration) return;
+      _processedImageCache.clear();
+
       final updatedGroups = <PhotoGroup>[];
       for (final g in state.groups) {
+        final activeEnh = g.enhancement.isDefault ? state.enhancement : g.enhancement;
         final processed = await ImageProcessor.processPhotoAsync(
           sourceBytes: cutoutBytes,
           cropData: g.cropData,
-          enhancement: g.enhancement.isDefault ? state.enhancement : g.enhancement,
+          enhancement: activeEnh,
           targetWidthMm: g.widthMm,
           targetHeightMm: g.heightMm,
           borderConfig: state.borderConfig,
         );
+
+        if (generation != _asyncOperationGeneration) return;
+
+        final cacheKey = _buildCacheKey(
+          rawBytes: cutoutBytes,
+          presetId: g.preset.id,
+          cropData: g.cropData,
+          enhancement: activeEnh,
+          borderConfig: state.borderConfig,
+          targetWidthMm: g.widthMm,
+          targetHeightMm: g.heightMm,
+          dpi: 300,
+        );
+        _cacheProcessedImage(cacheKey, processed);
+
         final updated = g.copyWith(
           rawImageBytes: cutoutBytes,
           processedBytes: processed,
         );
         updatedGroups.add(updated);
-        _cachedPresetGroups[g.preset.id] = updated;
       }
 
-      final layout = LayoutEngine.calculateMultiPhotoLayout(
+      final layouts = LayoutEngine.calculateMultiPhotoLayoutPages(
         paperPreset: state.paperPreset,
         groups: updatedGroups,
         orientation: state.orientation,
@@ -1412,7 +1592,9 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         backgroundColorHex: replaceColorHex,
         clearBackgroundColor: replaceColorHex == null,
         groups: updatedGroups,
-        currentLayout: layout,
+        currentLayouts: layouts,
+        currentLayout: layouts.firstOrNull,
+        activeSheetIndex: state.activeSheetIndex.clamp(0, layouts.isEmpty ? 0 : layouts.length - 1),
         isProcessing: false,
       );
       _debouncedSaveDraft();
@@ -1430,29 +1612,46 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     final original = state.originalRawImageBytes;
     if (original == null || !state.isBgRemoved) return;
 
+    final generation = ++_asyncOperationGeneration;
     _pushUndo();
     state = state.copyWith(isProcessing: true, clearError: true);
 
     try {
+      _processedImageCache.clear();
       final updatedGroups = <PhotoGroup>[];
       for (final g in state.groups) {
+        final activeEnh = g.enhancement.isDefault ? state.enhancement : g.enhancement;
         final processed = await ImageProcessor.processPhotoAsync(
           sourceBytes: original,
           cropData: g.cropData,
-          enhancement: g.enhancement.isDefault ? state.enhancement : g.enhancement,
+          enhancement: activeEnh,
           targetWidthMm: g.widthMm,
           targetHeightMm: g.heightMm,
           borderConfig: state.borderConfig,
         );
+
+        if (generation != _asyncOperationGeneration) return;
+
+        final cacheKey = _buildCacheKey(
+          rawBytes: original,
+          presetId: g.preset.id,
+          cropData: g.cropData,
+          enhancement: activeEnh,
+          borderConfig: state.borderConfig,
+          targetWidthMm: g.widthMm,
+          targetHeightMm: g.heightMm,
+          dpi: 300,
+        );
+        _cacheProcessedImage(cacheKey, processed);
+
         final updated = g.copyWith(
           rawImageBytes: original,
           processedBytes: processed,
         );
         updatedGroups.add(updated);
-        _cachedPresetGroups[g.preset.id] = updated;
       }
 
-      final layout = LayoutEngine.calculateMultiPhotoLayout(
+      final layouts = LayoutEngine.calculateMultiPhotoLayoutPages(
         paperPreset: state.paperPreset,
         groups: updatedGroups,
         orientation: state.orientation,
@@ -1466,7 +1665,9 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
         isBgRemoved: false,
         clearBackgroundColor: true,
         groups: updatedGroups,
-        currentLayout: layout,
+        currentLayouts: layouts,
+        currentLayout: layouts.firstOrNull,
+        activeSheetIndex: state.activeSheetIndex.clamp(0, layouts.isEmpty ? 0 : layouts.length - 1),
         isProcessing: false,
       );
       _debouncedSaveDraft();
@@ -1497,10 +1698,46 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     await _reprocessAllGroups();
   }
 
-  Future<bool> printDocument({Printer? targetPrinter}) async {
+  Future<List<PrintLayout>> _buildPrintReadyLayouts() async {
     final layouts = state.currentLayouts.isNotEmpty
         ? state.currentLayouts
         : (state.currentLayout != null ? [state.currentLayout!] : <PrintLayout>[]);
+    if (layouts.isEmpty) return layouts;
+
+    final hasLargePhoto = state.groups.any((g) => math.max(g.widthMm, g.heightMm) > 100);
+    if (!hasLargePhoto) return layouts;
+
+    final highResGroups = <PhotoGroup>[];
+    for (final g in state.groups) {
+      if (math.max(g.widthMm, g.heightMm) > 100) {
+        final highResBytes = await ImageProcessor.processPhotoAsync(
+          sourceBytes: g.rawImageBytes ?? state.rawImageBytes!,
+          cropData: g.cropData,
+          enhancement: g.enhancement.isDefault ? state.enhancement : g.enhancement,
+          targetWidthMm: g.widthMm,
+          targetHeightMm: g.heightMm,
+          borderConfig: state.borderConfig,
+          dpi: 300,
+        );
+        highResGroups.add(g.copyWith(processedBytes: highResBytes));
+      } else {
+        highResGroups.add(g);
+      }
+    }
+
+    return LayoutEngine.calculateMultiPhotoLayoutPages(
+      paperPreset: state.paperPreset,
+      groups: highResGroups,
+      orientation: state.orientation,
+      spacingMm: state.spacingMm,
+      marginMm: state.marginMm,
+      scaling: state.photoScaling,
+      dpi: 300,
+    );
+  }
+
+  Future<bool> printDocument({Printer? targetPrinter}) async {
+    final layouts = await _buildPrintReadyLayouts();
     if (layouts.isEmpty || layouts.every((l) => l.items.isEmpty)) return false;
 
     final printerService = _ref.read(printerServiceProvider);
@@ -1542,9 +1779,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
   }
 
   Future<bool> exportPdf() async {
-    final layouts = state.currentLayouts.isNotEmpty
-        ? state.currentLayouts
-        : (state.currentLayout != null ? [state.currentLayout!] : <PrintLayout>[]);
+    final layouts = await _buildPrintReadyLayouts();
     if (layouts.isEmpty || layouts.every((l) => l.items.isEmpty)) return false;
 
     final printerService = _ref.read(printerServiceProvider);
@@ -1596,7 +1831,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
     required String fileName,
     required Map<String, dynamic> metadata,
   }) async {
-    _cachedPresetGroups.clear();
+    _processedImageCache.clear();
 
     final pmName = metadata['presetModeName'] as String?;
     PhotoTypePresetMode mode = PhotoTypePresetMode.passportOnly;
@@ -1861,7 +2096,7 @@ class PassportPhotoNotifier extends StateNotifier<PassportPhotoState> {
       }
     }
 
-    _cachedPresetGroups.clear();
+    _processedImageCache.clear();
     _draftDebounceTimer?.cancel();
     await DraftStorageService.clearPhotoDraft();
     state = const PassportPhotoState();
@@ -1897,18 +2132,6 @@ class _GroupResizeParams {
 }
 
 Uint8List _processGroupPhotoWorker(_GroupResizeParams params) {
-  var image = img.decodeImage(params.rawBytes);
-  if (image == null) return params.rawBytes;
-
-  if (params.cropData.rotationDegrees != 0) {
-    image = ImageProcessor.rotate(image, params.cropData.rotationDegrees.round());
-  }
-  if (params.cropData.fineAngleDegrees.abs() > 0.01) {
-    image = ImageProcessor.rotateArbitrary(image, params.cropData.fineAngleDegrees);
-  }
-
-  final cropped = ImageProcessor.cropNormalized(image, params.cropData);
-
   // Cap effective DPI for large sheets (e.g. A4) so preview rendering is instantaneous (<50ms)
   int effectiveDpi = params.dpi;
   final longestMm = math.max(params.targetWidthMm, params.targetHeightMm);
@@ -1916,31 +2139,15 @@ Uint8List _processGroupPhotoWorker(_GroupResizeParams params) {
     effectiveDpi = (1600 * 25.4 / longestMm).round();
   }
 
-  // 1. Resize directly to physical dimensions with fast bilinear interpolation
-  final resized = ImageProcessor.resizeToPhysical(
-    cropped,
+  return ImageProcessor.processPhoto(
+    sourceBytes: params.rawBytes,
+    cropData: params.cropData,
+    enhancement: params.enhancement,
     targetWidthMm: params.targetWidthMm,
     targetHeightMm: params.targetHeightMm,
-    dpi: effectiveDpi,
-    interpolation: img.Interpolation.linear,
-  );
-
-  // 2. Fast enhancement on small thumbnail resolution (200k pixels, takes 3ms)
-  final enhanced = ImageProcessor.adjustEnhancements(resized, params.enhancement);
-
-  // 3. Apply physical borders
-  final bordered = ImageProcessor.applyBorders(
-    enhanced,
     borderConfig: params.borderConfig,
     dpi: effectiveDpi,
   );
-
-  // 4. Fast high-quality encoding (JPEG takes ~20ms, PNG only if transparent)
-  if (bordered.hasAlpha) {
-    return ImageProcessor.encodePng(bordered);
-  } else {
-    return ImageProcessor.encodeJpg(bordered, quality: 95);
-  }
 }
 
 final passportPhotoProvider = StateNotifierProvider<PassportPhotoNotifier, PassportPhotoState>((ref) {

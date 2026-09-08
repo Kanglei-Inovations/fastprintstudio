@@ -12,6 +12,7 @@ class PrintLayout {
   final String serviceType;
   final int maxCapacity;
   final String? warningMessage;
+  final bool showDragonCutLines;
 
   const PrintLayout({
     required this.paperPreset,
@@ -23,6 +24,7 @@ class PrintLayout {
     this.serviceType = '',
     this.maxCapacity = 0,
     this.warningMessage,
+    this.showDragonCutLines = false,
   });
 
   double get paperWidthMm => paperPreset.effectiveWidthMm(orientation);
@@ -60,6 +62,7 @@ class PrintLayout {
     String? serviceType,
     int? maxCapacity,
     String? warningMessage,
+    bool? showDragonCutLines,
   }) {
     return PrintLayout(
       paperPreset: paperPreset ?? this.paperPreset,
@@ -71,6 +74,7 @@ class PrintLayout {
       serviceType: serviceType ?? this.serviceType,
       maxCapacity: maxCapacity ?? this.maxCapacity,
       warningMessage: warningMessage,
+      showDragonCutLines: showDragonCutLines ?? this.showDragonCutLines,
     );
   }
 }

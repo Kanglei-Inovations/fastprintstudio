@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/constants/paper_presets.dart';
 import '../../core/models/border_config.dart';
 import '../../core/models/crop_rect_data.dart';
+import '../../core/models/id_card_entry.dart';
 import '../../core/models/id_card_preset.dart';
 import '../../core/models/layout_item.dart';
 import '../../core/models/l805_calibration.dart';
@@ -622,6 +623,7 @@ class LayoutEngine {
     double gapMm = 3.0,
     int dpi = 300,
     bool swapFrontBack = false,
+    bool showDragonCutLines = true,
   }) {
     final paperW = paperPreset.effectiveWidthMm(orientation);
     final paperH = paperPreset.effectiveHeightMm(orientation);
@@ -722,6 +724,7 @@ class LayoutEngine {
             yMm: startY + cardH + gapMm,
             widthMm: cardW,
             heightMm: cardH,
+            rotationDegrees: 180,
             isFront: swapFrontBack,
             isBack: !swapFrontBack,
           ),
@@ -770,19 +773,175 @@ class LayoutEngine {
       items: items,
       serviceType: 'Aadhaar / ID Card',
       maxCapacity: 2,
+      showDragonCutLines: showDragonCutLines,
     );
   }
 
-  /// Calculates Dragon Sheet (200 x 300 mm) layout for PVC ID cards.
+  /// Calculates multi-page layout for Photo Paper / Lamination workflow
   /// Supports:
-  /// - 5 Front + Back pairs (10 items total) in a 2-col x 5-row grid (Duplex mode).
-  /// - OR 10 Single-side cards in a 2-col x 5-row grid.
+  /// - 4R paper: 1 card (front + back duplex or single) per sheet -> M sheets for M cards.
+  /// - A4 paper: packs multiple card pairs starting from Top-Left, wrapping to next sheet if page is full.
+  static List<PrintLayout> calculateMultiIdCardLayoutPages({
+    required PaperPreset paperPreset,
+    required IDCardPreset idPreset,
+    required List<IdCardEntry> cards,
+    PaperOrientation orientation = PaperOrientation.landscape,
+    double marginMm = 3.0,
+    double gapMm = 3.0,
+    int dpi = 300,
+    bool showDragonCutLines = true,
+  }) {
+    final validCards = cards.where((c) => c.frontBytes != null).toList();
+    if (validCards.isEmpty) {
+      return [];
+    }
+
+    final is4R = paperPreset.id == '4r' || paperPreset.id == 'four_r' || paperPreset.widthMm <= 105;
+    if (is4R) {
+      // 1 card per 4R sheet (1 file/person per page, then next page for next file/person)
+      final layouts = <PrintLayout>[];
+      for (int i = 0; i < validCards.length; i++) {
+        final card = validCards[i];
+        final layout = calculateIdCardLayout(
+          paperPreset: paperPreset,
+          idPreset: idPreset,
+          frontImageBytes: card.frontBytes!,
+          backImageBytes: card.hasBothSides ? card.backBytes : null,
+          orientation: orientation,
+          marginMm: marginMm,
+          gapMm: gapMm,
+          dpi: dpi,
+          swapFrontBack: card.swapFrontBack,
+          showDragonCutLines: showDragonCutLines,
+        );
+        layouts.add(layout.copyWith(
+          serviceType: validCards.length > 1
+              ? '${idPreset.name} (${card.name} - Sheet ${i + 1} of ${validCards.length})'
+              : idPreset.name,
+        ));
+      }
+      return layouts;
+    }
+
+    // For A4 or other larger paper:
+    // Place cards starting from top-left.
+    final paperW = paperPreset.effectiveWidthMm(orientation);
+    final paperH = paperPreset.effectiveHeightMm(orientation);
+    final cardW = idPreset.widthMm;
+    final cardH = idPreset.heightMm;
+
+    final layouts = <PrintLayout>[];
+    var currentItems = <LayoutItem>[];
+    int pageNum = 1;
+
+    double curX = marginMm;
+    double curY = marginMm;
+    double rowMaxH = 0;
+
+    for (int i = 0; i < validCards.length; i++) {
+      final card = validCards[i];
+      final hasBoth = card.hasBothSides && card.backBytes != null;
+      final firstImg = card.swapFrontBack && hasBoth ? card.backBytes! : card.frontBytes!;
+      final secondImg = card.swapFrontBack && hasBoth ? card.frontBytes! : card.backBytes;
+
+      // Duplex side-by-side or single
+      final entryW = hasBoth ? (cardW * 2 + gapMm) : cardW;
+      final entryH = cardH;
+
+      // Check if entry fits in current row
+      if (curX + entryW > paperW - marginMm && curX > marginMm) {
+        // Move to next row
+        curX = marginMm;
+        curY += rowMaxH + gapMm;
+        rowMaxH = 0;
+      }
+
+      // Check if entry fits on current page
+      if (curY + entryH > paperH - marginMm && currentItems.isNotEmpty) {
+        // End current page and start a new one
+        layouts.add(PrintLayout(
+          paperPreset: paperPreset,
+          orientation: orientation,
+          dpi: dpi,
+          marginMm: marginMm,
+          spacingMm: gapMm,
+          items: List.from(currentItems),
+          serviceType: '${idPreset.name} (Sheet $pageNum)',
+          maxCapacity: currentItems.length,
+          showDragonCutLines: showDragonCutLines,
+        ));
+        pageNum++;
+        currentItems = <LayoutItem>[];
+        curX = marginMm;
+        curY = marginMm;
+        rowMaxH = 0;
+      }
+
+      // Place first side (Front or swapped Back)
+      currentItems.add(LayoutItem(
+        id: _uuid.v4(),
+        label: '${card.name} ${card.swapFrontBack ? "Back" : "Front"}',
+        imageBytes: firstImg,
+        xMm: curX,
+        yMm: curY,
+        widthMm: cardW,
+        heightMm: cardH,
+        isFront: !card.swapFrontBack,
+        isBack: card.swapFrontBack,
+        groupId: card.id,
+        groupName: card.name,
+      ));
+
+      // Place second side if duplex
+      if (hasBoth && secondImg != null) {
+        currentItems.add(LayoutItem(
+          id: _uuid.v4(),
+          label: '${card.name} ${card.swapFrontBack ? "Front" : "Back"}',
+          imageBytes: secondImg,
+          xMm: curX + cardW + gapMm,
+          yMm: curY,
+          widthMm: cardW,
+          heightMm: cardH,
+          isFront: card.swapFrontBack,
+          isBack: !card.swapFrontBack,
+          groupId: card.id,
+          groupName: card.name,
+        ));
+      }
+
+      curX += entryW + gapMm;
+      rowMaxH = math.max(rowMaxH, entryH);
+    }
+
+    if (currentItems.isNotEmpty) {
+      layouts.add(PrintLayout(
+        paperPreset: paperPreset,
+        orientation: orientation,
+        dpi: dpi,
+        marginMm: marginMm,
+        spacingMm: gapMm,
+        items: List.from(currentItems),
+        serviceType: layouts.isNotEmpty
+            ? '${idPreset.name} (Sheet $pageNum)'
+            : idPreset.name,
+        maxCapacity: currentItems.length,
+        showDragonCutLines: showDragonCutLines,
+      ));
+    }
+
+    return layouts;
+  }
+
+  /// Calculates single-sheet layout for Dragon Sheet (200 x 300 mm)
+  /// - Duplex mode: places pairs (Front & Back)
+  /// - Single mode: places all fronts
   static PrintLayout calculateDragonSheetLayout({
     required List<Uint8List> cardImages,
     bool isDuplex = true,
-    double marginMm = 6.0,
-    double spacingMm = 4.0,
+    double marginMm = 2.0,
+    double spacingMm = 0.5,
     int dpi = 300,
+    bool showDragonCutLines = true,
   }) {
     const sheetPreset = StandardPaperPresets.dragonSheet200x300;
     const cardW = 85.6;
@@ -792,19 +951,18 @@ class LayoutEngine {
 
     // Available sheet dimensions: 200 x 300 mm
     final totalCardsW = (cols * cardW) + ((cols - 1) * spacingMm);
-    final totalCardsH = (rows * cardH) + ((rows - 1) * spacingMm);
 
-    // Center grid on sheet
+    // Center grid horizontally, start from top with marginMm
     final startX = (sheetPreset.widthMm - totalCardsW) / 2.0;
-    final startY = (sheetPreset.heightMm - totalCardsH) / 2.0;
+    final startY = math.max(marginMm, 0.0);
 
     final items = <LayoutItem>[];
     const totalSlots = cols * rows; // 10 slots
     final count = math.min(cardImages.length, totalSlots);
 
     for (int i = 0; i < count; i++) {
-      final r = i % rows;
-      final c = i ~/ rows;
+      final r = i ~/ cols;
+      final c = i % cols;
       final x = startX + (c * (cardW + spacingMm));
       final y = startY + (r * (cardH + spacingMm));
 
@@ -841,7 +999,240 @@ class LayoutEngine {
       items: items,
       serviceType: 'Dragon Sheet PVC (200×300mm)',
       maxCapacity: totalSlots,
+      showDragonCutLines: showDragonCutLines,
     );
+  }
+
+  /// Calculates multi-sheet layout for Dragon Sheet (200 x 300 mm)
+  /// - Duplex mode: places up to 5 cards per sheet (Rows 0 to 4),
+  ///   with Front on LEFT (Col 0) and Back on RIGHT (Col 1), starting from TOP.
+  ///   Next cards follow row-by-row down. If > 5 cards, paginates to Sheet 2, Sheet 3, etc.
+  /// - Single mode: places up to 10 cards per sheet across 2 columns x 5 rows.
+  static List<PrintLayout> calculateMultiDragonSheetLayoutPages({
+    required List<IdCardEntry> cards,
+    bool isDuplex = true,
+    double marginMm = 2.0,
+    double spacingMm = 0.5,
+    int dpi = 300,
+    bool showDragonCutLines = true,
+  }) {
+    final validCards = cards.where((c) => c.frontBytes != null).toList();
+    if (validCards.isEmpty) return [];
+
+    const sheetPreset = StandardPaperPresets.dragonSheet200x300;
+    const cardW = 85.6;
+    const cardH = 54.0;
+    const cols = 2;
+    final totalCardsW = (cols * cardW) + ((cols - 1) * spacingMm);
+    final startX = (sheetPreset.widthMm - totalCardsW) / 2.0;
+    final startY = math.max(marginMm, 0.0);
+
+    final layouts = <PrintLayout>[];
+
+    if (isDuplex) {
+      const cardsPerSheet = 5;
+      final totalSheets = (validCards.length + cardsPerSheet - 1) ~/ cardsPerSheet;
+
+      for (int s = 0; s < totalSheets; s++) {
+        final sheetCards = validCards.skip(s * cardsPerSheet).take(cardsPerSheet).toList();
+        final items = <LayoutItem>[];
+
+        for (int r = 0; r < sheetCards.length; r++) {
+          final card = sheetCards[r];
+          final hasBoth = card.hasBothSides && card.backBytes != null;
+          final frontImg = card.swapFrontBack && hasBoth ? card.backBytes! : card.frontBytes!;
+          final backImg = card.swapFrontBack && hasBoth ? card.frontBytes! : (card.backBytes ?? frontImg);
+
+          final y = startY + (r * (cardH + spacingMm));
+
+          // Front on Left (Col 0)
+          items.add(
+            LayoutItem(
+              id: _uuid.v4(),
+              label: '${card.name} Front',
+              imageBytes: frontImg,
+              xMm: startX,
+              yMm: y,
+              widthMm: cardW,
+              heightMm: cardH,
+              isFront: true,
+              isBack: false,
+              groupId: card.id,
+              groupName: card.name,
+            ),
+          );
+
+          // Back on Right (Col 1)
+          items.add(
+            LayoutItem(
+              id: _uuid.v4(),
+              label: '${card.name} Back',
+              imageBytes: backImg,
+              xMm: startX + cardW + spacingMm,
+              yMm: y,
+              widthMm: cardW,
+              heightMm: cardH,
+              isFront: false,
+              isBack: true,
+              groupId: card.id,
+              groupName: card.name,
+            ),
+          );
+        }
+
+        final title = totalSheets > 1
+            ? 'Dragon Sheet PVC (Sheet ${s + 1} of $totalSheets)'
+            : 'Dragon Sheet PVC (200×300mm)';
+
+        layouts.add(PrintLayout(
+          paperPreset: sheetPreset,
+          orientation: PaperOrientation.portrait,
+          dpi: dpi,
+          marginMm: marginMm,
+          spacingMm: spacingMm,
+          items: items,
+          serviceType: title,
+          maxCapacity: 10,
+          showDragonCutLines: showDragonCutLines,
+        ));
+      }
+    } else {
+      // Single side mode: 10 cards per sheet
+      const cardsPerSheet = 10;
+      final totalSheets = (validCards.length + cardsPerSheet - 1) ~/ cardsPerSheet;
+
+      for (int s = 0; s < totalSheets; s++) {
+        final sheetCards = validCards.skip(s * cardsPerSheet).take(cardsPerSheet).toList();
+        final items = <LayoutItem>[];
+
+        for (int i = 0; i < sheetCards.length; i++) {
+          final card = sheetCards[i];
+          final r = i ~/ cols;
+          final c = i % cols;
+          final x = startX + (c * (cardW + spacingMm));
+          final y = startY + (r * (cardH + spacingMm));
+
+          items.add(
+            LayoutItem(
+              id: _uuid.v4(),
+              label: '${card.name} (${i + 1})',
+              imageBytes: card.frontBytes!,
+              xMm: x,
+              yMm: y,
+              widthMm: cardW,
+              heightMm: cardH,
+              isFront: true,
+              isBack: false,
+              groupId: card.id,
+              groupName: card.name,
+            ),
+          );
+        }
+
+        final title = totalSheets > 1
+            ? 'Dragon Sheet PVC Single (Sheet ${s + 1} of $totalSheets)'
+            : 'Dragon Sheet PVC Single (200×300mm)';
+
+        layouts.add(PrintLayout(
+          paperPreset: sheetPreset,
+          orientation: PaperOrientation.portrait,
+          dpi: dpi,
+          marginMm: marginMm,
+          spacingMm: spacingMm,
+          items: items,
+          serviceType: title,
+          maxCapacity: 10,
+          showDragonCutLines: showDragonCutLines,
+        ));
+      }
+    }
+
+    return layouts;
+  }
+
+  /// Calculates multi-page layout for Epson L805 PVC Tray
+  /// Batches cards into carrier tray pairs (Slot 1 and Slot 2):
+  /// - For each batch of 2 cards (Card A, Card B):
+  ///   - Page 2k + 1: Front of Card A (Slot 1) + Front of Card B (Slot 2)
+  ///   - Page 2k + 2: Back of Card A (Slot 1) + Back of Card B (Slot 2)
+  static List<PrintLayout> calculateMultiL805TrayLayoutPages({
+    required List<IdCardEntry> cards,
+    int cardsPerTray = 2, // 1 or 2
+    L805Calibration calibration = L805Calibration.factoryDefault,
+    int dpi = 300,
+  }) {
+    final validCards = cards.where((c) => c.frontBytes != null).toList();
+    if (validCards.isEmpty) return [];
+
+    final layouts = <PrintLayout>[];
+    final step = cardsPerTray.clamp(1, 2);
+
+    for (int i = 0; i < validCards.length; i += step) {
+      final card1 = validCards[i];
+      final card2 = (step == 2 && i + 1 < validCards.length) ? validCards[i + 1] : null;
+
+      final front1 = card1.swapFrontBack ? (card1.backBytes ?? card1.frontBytes!) : card1.frontBytes!;
+      final back1 = card1.swapFrontBack ? card1.frontBytes! : card1.backBytes;
+
+      Uint8List? front2;
+      Uint8List? back2;
+      if (card2 != null) {
+        front2 = card2.swapFrontBack ? (card2.backBytes ?? card2.frontBytes!) : card2.frontBytes!;
+        back2 = card2.swapFrontBack ? card2.frontBytes! : card2.backBytes;
+      }
+
+      final batchNum = (i ~/ step) + 1;
+      final totalBatches = (validCards.length + step - 1) ~/ step;
+
+      // Page 1 of this batch: Front Side
+      final frontLayout = calculateL805A4TrayLayout(
+        slot1ImageBytes: front1,
+        slot2ImageBytes: front2,
+        isFrontPage: true,
+        calibration: calibration,
+        dpi: dpi,
+        slot1GroupId: card1.id,
+        slot2GroupId: card2?.id,
+        slot1GroupName: card1.name,
+        slot2GroupName: card2?.name,
+      );
+
+      final frontTitle = totalBatches > 1
+          ? 'Epson L805 PVC (Batch $batchNum/$totalBatches - Front)'
+          : 'Epson L805 PVC (Front Page)';
+
+      layouts.add(frontLayout.copyWith(serviceType: frontTitle));
+
+      // Page 2 of this batch: Back Side (if at least one card in this batch has both sides enabled, or has a back)
+      final hasBack = card1.hasBothSides || (card2 != null && card2.hasBothSides) || back1 != null || back2 != null;
+      if (hasBack) {
+        final backLayout = calculateL805A4TrayLayout(
+          slot1ImageBytes: (card1.hasBothSides && back1 != null)
+              ? back1
+              : (card1.hasBothSides ? (back1 ?? front1) : null),
+          slot2ImageBytes: card2 != null
+              ? ((card2.hasBothSides && back2 != null)
+                  ? back2
+                  : (card2.hasBothSides ? (back2 ?? front2) : null))
+              : null,
+          isFrontPage: false,
+          calibration: calibration,
+          dpi: dpi,
+          slot1GroupId: card1.id,
+          slot2GroupId: card2?.id,
+          slot1GroupName: card1.name,
+          slot2GroupName: card2?.name,
+        );
+
+        final backTitle = totalBatches > 1
+            ? 'Epson L805 PVC (Batch $batchNum/$totalBatches - Back)'
+            : 'Epson L805 PVC (Back Page)';
+
+        layouts.add(backLayout.copyWith(serviceType: backTitle));
+      }
+    }
+
+    return layouts;
   }
 
   /// Calculates Epson L805 A4 Carrier Tray layout for either Front page or Back page
@@ -851,32 +1242,41 @@ class LayoutEngine {
   /// - isFrontPage: true for Front page, false for Back page
   /// - calibration: L805Calibration
   static PrintLayout calculateL805A4TrayLayout({
-    required Uint8List slot1ImageBytes,
+    Uint8List? slot1ImageBytes,
     Uint8List? slot2ImageBytes,
     bool isFrontPage = true,
     L805Calibration calibration = L805Calibration.factoryDefault,
     int dpi = 300,
+    String? slot1GroupId,
+    String? slot2GroupId,
+    String? slot1GroupName,
+    String? slot2GroupName,
   }) {
-    final items = <LayoutItem>[
-      LayoutItem(
-        id: _uuid.v4(),
-        label: isFrontPage ? 'Slot 1: Card #1 (Front)' : 'Slot 1: Card #1 (Back)',
-        imageBytes: slot1ImageBytes,
-        xMm: calibration.effectiveSlot1X,
-        yMm: calibration.effectiveSlot1Y,
-        widthMm: calibration.cardWidthMm,
-        heightMm: calibration.cardHeightMm,
-        isFront: isFrontPage,
-        isBack: !isFrontPage,
-        groupName: 'Card #1',
-      ),
-    ];
+    final items = <LayoutItem>[];
+
+    if (slot1ImageBytes != null) {
+      items.add(
+        LayoutItem(
+          id: _uuid.v4(),
+          label: 'Slot 1: ${slot1GroupName ?? "Card #1"} (${isFrontPage ? "Front" : "Back"})',
+          imageBytes: slot1ImageBytes,
+          xMm: calibration.effectiveSlot1X,
+          yMm: calibration.effectiveSlot1Y,
+          widthMm: calibration.cardWidthMm,
+          heightMm: calibration.cardHeightMm,
+          isFront: isFrontPage,
+          isBack: !isFrontPage,
+          groupId: slot1GroupId,
+          groupName: slot1GroupName ?? 'Card #1',
+        ),
+      );
+    }
 
     if (slot2ImageBytes != null) {
       items.add(
         LayoutItem(
           id: _uuid.v4(),
-          label: isFrontPage ? 'Slot 2: Card #2 (Front)' : 'Slot 2: Card #2 (Back)',
+          label: 'Slot 2: ${slot2GroupName ?? "Card #2"} (${isFrontPage ? "Front" : "Back"})',
           imageBytes: slot2ImageBytes,
           xMm: calibration.effectiveSlot2X,
           yMm: calibration.effectiveSlot2Y,
@@ -884,7 +1284,8 @@ class LayoutEngine {
           heightMm: calibration.cardHeightMm,
           isFront: isFrontPage,
           isBack: !isFrontPage,
-          groupName: 'Card #2',
+          groupId: slot2GroupId,
+          groupName: slot2GroupName ?? 'Card #2',
         ),
       );
     }

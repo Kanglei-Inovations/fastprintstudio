@@ -73,27 +73,14 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
         await _handleNewPhotoSelected(firstBytes, first.name);
       }
 
-      // If user selected multiple files, add subsequent files as additional person photos
+      // If user selected multiple files, legitimately prompt crop for each subsequent person
       if (files.length > 1 && mounted) {
-        debugPrint('[FastPrint Photo] 👥 User selected ${files.length} photos. Adding ${files.length - 1} extra photos...');
+        debugPrint('[FastPrint Photo] 👥 User selected ${files.length} photos. Prompting crop for additional photos...');
         for (int i = 1; i < files.length; i++) {
+          if (!mounted) break;
           final file = files[i];
           final bytes = await file.readAsBytes();
-          if (mounted) {
-            final cropRes = CropResult(
-              sourceRect: const Rect.fromLTWH(0, 0, 100, 100),
-              croppedBytes: bytes,
-              sourceWidth: 100,
-              sourceHeight: 100,
-              targetAspectRatio: StandardPhotoPresets.passport.aspectRatio,
-            );
-            await ref.read(passportPhotoProvider.notifier).addPersonPhoto(
-                  bytes: bytes,
-                  fileName: file.name,
-                  cropResult: cropRes,
-                  copies: 4,
-                );
-          }
+          await _promptAndAddPersonPhoto(bytes: bytes, fileName: file.name);
         }
       }
     } catch (e) {
@@ -114,44 +101,58 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
         return;
       }
 
-      final state = ref.read(passportPhotoProvider);
-      final notifier = ref.read(passportPhotoProvider.notifier);
-      final activePreset = state.groups.isNotEmpty
-          ? state.groups.first.preset
-          : StandardPhotoPresets.passport;
-
       for (final file in files) {
+        if (!mounted) break;
         final readSw = Stopwatch()..start();
         final bytes = await file.readAsBytes();
         debugPrint('[FastPrint Photo] 📥 Read "${file.name}" (${(bytes.length / 1024).toStringAsFixed(1)} KB) in ${readSw.elapsedMilliseconds}ms');
-        if (!mounted) continue;
-
-        debugPrint('[FastPrint Photo] ✂️ Opening CropEditorModal for Person ${state.groups.length + 1} (${file.name})...');
-        final cropRes = await CropEditorModal.show(
-          context: context,
-          imageBytes: bytes,
-          initialCrop: CropRectData.centeredWithAspectRatio(activePreset.aspectRatio),
-          initialEnhancement: const EnhancementConfig(),
-          targetAspectRatio: activePreset.aspectRatio,
-          title: 'Edit Image - Person ${state.groups.length + 1} (${activePreset.formattedDimensions})',
-        );
-
-        if (cropRes != null && mounted) {
-          debugPrint('[FastPrint Photo] ✂️ Crop applied for Person ${state.groups.length + 1}. Adding to canvas...');
-          await notifier.addPersonPhoto(
-            bytes: bytes,
-            fileName: file.name,
-            cropResult: cropRes,
-            preset: activePreset,
-            copies: 4,
-          );
-        } else {
-          debugPrint('[FastPrint Photo] ℹ️ Crop canceled for "${file.name}".');
-        }
+        await _promptAndAddPersonPhoto(bytes: bytes, fileName: file.name);
       }
       debugPrint('[FastPrint Photo] ✅ _pickAdditionalPersonPhoto finished in ${sw.elapsedMilliseconds}ms');
     } catch (e) {
       debugPrint('[FastPrint Photo] ❌ Error adding additional person photo: $e');
+    }
+  }
+
+  /// Prompts CropEditorModal with actual image dimensions and aspect ratio, then adds person photo
+  Future<void> _promptAndAddPersonPhoto({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    if (!mounted) return;
+    final state = ref.read(passportPhotoProvider);
+    final notifier = ref.read(passportPhotoProvider.notifier);
+    final activePreset = state.groups.isNotEmpty
+        ? state.groups.first.preset
+        : (state.presetMode == PhotoTypePresetMode.fourRPhoto
+            ? StandardPhotoPresets.fourR
+            : (state.presetMode == PhotoTypePresetMode.a4Photo
+                ? StandardPhotoPresets.a4
+                : StandardPhotoPresets.passport));
+
+    final personIdx = state.groups.length + 1;
+    debugPrint('[FastPrint Photo] ✂️ Opening CropEditorModal for Person $personIdx ($fileName)...');
+
+    final cropRes = await CropEditorModal.show(
+      context: context,
+      imageBytes: bytes,
+      initialCrop: CropRectData.centeredWithAspectRatio(activePreset.aspectRatio),
+      initialEnhancement: const EnhancementConfig(),
+      targetAspectRatio: activePreset.aspectRatio,
+      title: 'Edit Image - Person $personIdx (${activePreset.formattedDimensions})',
+    );
+
+    if (cropRes != null && mounted) {
+      debugPrint('[FastPrint Photo] ✂️ Crop applied for Person $personIdx. Adding to canvas...');
+      await notifier.addPersonPhoto(
+        bytes: bytes,
+        fileName: fileName,
+        cropResult: cropRes,
+        preset: activePreset,
+        copies: 4,
+      );
+    } else {
+      debugPrint('[FastPrint Photo] ℹ️ Crop canceled for "$fileName".');
     }
   }
 
@@ -278,7 +279,6 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
             if (details.files.isEmpty) return;
 
             final state = ref.read(passportPhotoProvider);
-            final notifier = ref.read(passportPhotoProvider.notifier);
 
             if (!state.hasImage) {
               final first = details.files.first;
@@ -288,43 +288,17 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
               }
               if (details.files.length > 1 && mounted) {
                 for (int i = 1; i < details.files.length; i++) {
+                  if (!mounted) break;
                   final f = details.files[i];
                   final b = await f.readAsBytes();
-                  if (mounted) {
-                    final cropRes = CropResult(
-                      sourceRect: const Rect.fromLTWH(0, 0, 100, 100),
-                      croppedBytes: b,
-                      sourceWidth: 100,
-                      sourceHeight: 100,
-                      targetAspectRatio: StandardPhotoPresets.passport.aspectRatio,
-                    );
-                    await notifier.addPersonPhoto(
-                      bytes: b,
-                      fileName: f.name,
-                      cropResult: cropRes,
-                      copies: 4,
-                    );
-                  }
+                  await _promptAndAddPersonPhoto(bytes: b, fileName: f.name);
                 }
               }
             } else {
               for (final f in details.files) {
+                if (!mounted) break;
                 final b = await f.readAsBytes();
-                if (mounted) {
-                  final cropRes = CropResult(
-                    sourceRect: const Rect.fromLTWH(0, 0, 100, 100),
-                    croppedBytes: b,
-                    sourceWidth: 100,
-                    sourceHeight: 100,
-                    targetAspectRatio: StandardPhotoPresets.passport.aspectRatio,
-                  );
-                  await notifier.addPersonPhoto(
-                    bytes: b,
-                    fileName: f.name,
-                    cropResult: cropRes,
-                    copies: 4,
-                  );
-                }
+                await _promptAndAddPersonPhoto(bytes: b, fileName: f.name);
               }
             }
           },

@@ -77,6 +77,13 @@ class PdfInspector {
           errorMessage: 'This PDF is password protected.',
         );
       }
+      if (_hasEncryptTag(bytes)) {
+        return const PdfInspectionResult(
+          status: PdfStatus.passwordProtected,
+          isEncrypted: true,
+          errorMessage: 'This PDF is password protected.',
+        );
+      }
       return PdfInspectionResult(
         status: PdfStatus.malformed,
         errorMessage: 'Unable to read this PDF. The file may be damaged or unsupported.',
@@ -189,10 +196,14 @@ class PdfInspector {
   static bool _hasEncryptTag(Uint8List bytes) {
     try {
       final len = bytes.length;
-      final searchChunkSize = len > 8192 ? 8192 : len;
-      final endBytes = bytes.sublist(len - searchChunkSize);
-      final content = String.fromCharCodes(endBytes);
-      return content.contains('/Encrypt');
+      if (len <= 16384) {
+        final content = String.fromCharCodes(bytes);
+        return content.contains('/Encrypt');
+      }
+      final head = String.fromCharCodes(bytes.sublist(0, 8192));
+      if (head.contains('/Encrypt')) return true;
+      final tail = String.fromCharCodes(bytes.sublist(len - 8192));
+      return tail.contains('/Encrypt');
     } catch (_) {
       return false;
     }

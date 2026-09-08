@@ -11,6 +11,7 @@ class IdCardFileSelectorCard extends StatelessWidget {
   final VoidCallback onUploadPdf;
   final VoidCallback onUploadImage;
   final VoidCallback onChangeFile;
+  final VoidCallback? onAddCard;
 
   const IdCardFileSelectorCard({
     super.key,
@@ -22,6 +23,7 @@ class IdCardFileSelectorCard extends StatelessWidget {
     required this.onUploadPdf,
     required this.onUploadImage,
     required this.onChangeFile,
+    this.onAddCard,
   });
 
   String _formatSize(int bytes) {
@@ -35,15 +37,76 @@ class IdCardFileSelectorCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Section Title: "1. Select File"
-        Text(
-          '1. Select File',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            color: palette.textPrimary,
-            letterSpacing: -0.2,
-          ),
+        // Section Title: "1. Select ID Document"
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: palette.isDark
+                          ? palette.blue.withValues(alpha: 0.18)
+                          : palette.blue.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Icon(Icons.file_present_rounded, size: 14, color: palette.blue),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '1. SELECT ID DOCUMENT',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: palette.textSecondary,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (onAddCard != null)
+              Tooltip(
+                message: 'Add more ID card / person',
+                child: InkWell(
+                  onTap: onAddCard,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                    decoration: BoxDecoration(
+                      color: palette.isDark
+                          ? palette.blue.withValues(alpha: 0.18)
+                          : palette.blue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: palette.blue.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.add_rounded, size: 14, color: palette.blue),
+                        const SizedBox(width: 3),
+                        Text(
+                          '+ Add Card',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: palette.blue,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
         const SizedBox(height: 8),
 
@@ -51,7 +114,7 @@ class IdCardFileSelectorCard extends StatelessWidget {
           // Empty Upload Drop Area
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
             decoration: BoxDecoration(
               color: palette.cardBg,
               borderRadius: BorderRadius.circular(10),
@@ -68,29 +131,36 @@ class IdCardFileSelectorCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 42,
-                  height: 42,
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: palette.isDark ? palette.blue.withValues(alpha: 0.15) : palette.blueLight,
+                    gradient: LinearGradient(
+                      colors: [
+                        palette.blue.withValues(alpha: 0.2),
+                        palette.purple.withValues(alpha: 0.2),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: palette.isDark ? palette.blue.withValues(alpha: 0.3) : const Color(0xFFBFDBFE),
+                      color: palette.isDark ? palette.blue.withValues(alpha: 0.35) : const Color(0xFFBFDBFE),
                     ),
                   ),
-                  child: Icon(Icons.badge_outlined, color: palette.blue, size: 22),
+                  child: Icon(Icons.badge_rounded, color: palette.blue, size: 22),
                 ),
                 const SizedBox(height: 10),
                 Text(
                   'Drag & drop ID card here',
                   style: TextStyle(
                     fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w800,
                     color: palette.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 Text(
-                  'Supports Aadhaar, PAN, or ID card in PDF, JPG, PNG, WEBP',
+                  'Supports Aadhaar, PAN, Voter ID, or License (PDF, JPG, PNG)',
                   style: TextStyle(
                     fontSize: 10.5,
                     color: palette.textSecondary,
@@ -98,37 +168,39 @@ class IdCardFileSelectorCard extends StatelessWidget {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
+                Row(
                   children: [
-                    ElevatedButton.icon(
-                      onPressed: onUploadPdf,
-                      icon: const Icon(Icons.picture_as_pdf_outlined, size: 14, color: Colors.white),
-                      label: const Text(
-                        'Upload PDF',
-                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Colors.white),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: palette.blue,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        elevation: 1,
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: onUploadPdf,
+                        icon: const Icon(Icons.picture_as_pdf_rounded, size: 14, color: Colors.white),
+                        label: const Text(
+                          'Upload PDF',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFDC2626),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          elevation: 1,
+                        ),
                       ),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: onUploadImage,
-                      icon: Icon(Icons.image_outlined, size: 14, color: palette.textPrimary),
-                      label: Text(
-                        'Upload Image',
-                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.textPrimary),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        side: BorderSide(color: palette.cardBorder),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        backgroundColor: palette.cardBg,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: onUploadImage,
+                        icon: Icon(Icons.image_rounded, size: 14, color: palette.blue),
+                        label: Text(
+                          'Upload Image',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: palette.blue),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          side: BorderSide(color: palette.blue.withValues(alpha: 0.4)),
+                          backgroundColor: palette.blue.withValues(alpha: 0.08),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
                       ),
                     ),
                   ],
@@ -165,14 +237,25 @@ class IdCardFileSelectorCard extends StatelessWidget {
                         color: isPdf ? const Color(0xFFEF4444) : const Color(0xFF2563EB),
                         borderRadius: BorderRadius.circular(5),
                       ),
-                      child: Text(
-                        isPdf ? 'PDF' : 'IMAGE',
-                        style: const TextStyle(
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isPdf ? Icons.picture_as_pdf_rounded : Icons.image_rounded,
+                            size: 11,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isPdf ? 'PDF' : 'IMAGE',
+                            style: const TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -215,19 +298,31 @@ class IdCardFileSelectorCard extends StatelessWidget {
                           ],
                           Flexible(
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
                               decoration: BoxDecoration(
                                 color: palette.isDark ? palette.green.withValues(alpha: 0.2) : palette.greenLight,
                                 borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                'Ready to Print',
-                                style: TextStyle(
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: palette.green,
+                                border: Border.all(
+                                  color: palette.isDark ? palette.green.withValues(alpha: 0.35) : const Color(0xFFA7F3D0),
                                 ),
-                                overflow: TextOverflow.ellipsis,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.check_circle_rounded, size: 10, color: palette.green),
+                                  const SizedBox(width: 3),
+                                  Flexible(
+                                    child: Text(
+                                      'Ready to Print',
+                                      style: TextStyle(
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: palette.green,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -236,28 +331,38 @@ class IdCardFileSelectorCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
 
-                    // Change File Button
-                    InkWell(
-                      onTap: onChangeFile,
-                      borderRadius: BorderRadius.circular(4),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.refresh_rounded, size: 12, color: palette.blue),
-                            const SizedBox(width: 3),
-                            Text(
-                              'Change',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: palette.blue,
-                              ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Change File Button
+                        InkWell(
+                          onTap: onChangeFile,
+                          borderRadius: BorderRadius.circular(5),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3.5),
+                            decoration: BoxDecoration(
+                              color: palette.isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(5),
+                              border: Border.all(color: palette.cardBorder),
                             ),
-                          ],
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.sync_rounded, size: 12, color: palette.textSecondary),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Change',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: palette.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
                   ],
                 ),

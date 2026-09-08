@@ -71,15 +71,23 @@ class PrintJobSummaryPanel extends StatelessWidget {
           // Header
           Row(
             children: [
-              Icon(Icons.receipt_long_rounded, size: 16, color: palette.blue),
-              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: palette.isDark ? palette.blue.withValues(alpha: 0.2) : palette.blueLight,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(Icons.receipt_long_rounded, size: 15, color: palette.blue),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Print Job Summary',
+                  'Job Summary',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w800,
                     color: palette.textPrimary,
+                    letterSpacing: -0.2,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -94,32 +102,88 @@ class PrintJobSummaryPanel extends StatelessWidget {
               children: [
                 _JobSpecRow(
                   palette: palette,
+                  icon: Icons.precision_manufacturing_rounded,
+                  iconColor: isLamination ? palette.green : (isL805 ? palette.blue : palette.orange),
                   label: 'Method',
                   value: isLamination
-                      ? 'Photo Paper / 4R'
+                      ? 'Lamination Card'
                       : (isL805 ? 'Epson L805 Card' : 'Dragon Sheet'),
                 ),
                 if (!isLamination && !isL805)
                   _JobSpecRow(
                     palette: palette,
+                    icon: Icons.grid_view_rounded,
+                    iconColor: palette.orange,
                     label: 'Output Mode',
-                    value: pvcMode == PvcOutputMode.dragonSheetDuplex
-                        ? 'Dragon (5 Pairs)'
-                        : 'Dragon (10 Cards)',
+                    value: hasBothSides
+                        ? '5 Duplex Pairs'
+                        : '10 Cards Single',
                   ),
                 if (isL805) ...[
-                  _JobSpecRow(palette: palette, label: 'Paper / Carrier', value: 'A4 (210 × 297 mm)'),
-                  _JobSpecRow(palette: palette, label: 'Cards Placed', value: '$l805CardQuantity Card${l805CardQuantity > 1 ? 's' : ''} (85.6×54mm)'),
-                  _JobSpecRow(palette: palette, label: 'Sides', value: hasBothSides ? 'Front + Back' : 'Front Only'),
-                  _JobSpecRow(palette: palette, label: 'Page Output', value: '$l805PagesCount A4 Page${l805PagesCount > 1 ? 's' : ''}'),
-                  _JobSpecRow(palette: palette, label: 'Print Scale', value: '100% Actual Size'),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.style_rounded,
+                    iconColor: palette.blue,
+                    label: 'Carrier',
+                    value: 'A4 PVC Tray',
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.view_carousel_rounded,
+                    iconColor: palette.teal,
+                    label: 'Cards Placed',
+                    value: '${cardsPlaced > 0 ? cardsPlaced : 1} Card${cardsPlaced > 1 ? 's' : ''}',
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.flip_rounded,
+                    iconColor: palette.purple,
+                    label: 'Sides',
+                    value: hasBothSides ? 'Front + Back' : 'Front Only',
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.auto_stories_rounded,
+                    iconColor: palette.blue,
+                    label: 'Page Output',
+                    value: '$l805PagesCount A4 Page${l805PagesCount > 1 ? 's' : ''}',
+                  ),
                 ] else ...[
-                  _JobSpecRow(palette: palette, label: 'Document', value: preset.name),
-                  _JobSpecRow(palette: palette, label: 'Card Dimensions', value: preset.formattedDimensions),
-                  _JobSpecRow(palette: palette, label: 'Paper / Sheet', value: paper.name),
-                  _JobSpecRow(palette: palette, label: 'Cards Placed', value: '$cardsPlaced ($frontCount Front, $backCount Back)'),
-                  _JobSpecRow(palette: palette, label: 'Sheets Used', value: '$sheetsUsed ${sheetsUsed == 1 ? 'Sheet' : 'Sheets'}'),
-                  _JobSpecRow(palette: palette, label: 'Print Resolution', value: '300 DPI High-Def'),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.badge_rounded,
+                    iconColor: palette.purple,
+                    label: 'Document',
+                    value: preset.name,
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.straighten_rounded,
+                    iconColor: palette.teal,
+                    label: 'Dimensions',
+                    value: preset.formattedDimensions,
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.layers_rounded,
+                    iconColor: palette.blue,
+                    label: 'Paper Sheet',
+                    value: paper.name,
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.grid_view_rounded,
+                    iconColor: palette.green,
+                    label: 'Cards Placed',
+                    value: '$cardsPlaced ($frontCount F, $backCount B)',
+                  ),
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.copy_rounded,
+                    iconColor: palette.orange,
+                    label: 'Sheets Used',
+                    value: '$sheetsUsed ${sheetsUsed == 1 ? 'Sheet' : 'Sheets'}',
+                  ),
                 ],
 
                 const SizedBox(height: 10),
@@ -130,9 +194,15 @@ class PrintJobSummaryPanel extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Job Copies',
-                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: palette.textSecondary),
+                    Row(
+                      children: [
+                        Icon(Icons.repeat_rounded, size: 14, color: palette.textSecondary),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Job Copies',
+                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.textPrimary),
+                        ),
+                      ],
                     ),
                     Container(
                       height: 28,
@@ -147,7 +217,7 @@ class PrintJobSummaryPanel extends StatelessWidget {
                           InkWell(
                             onTap: copies > 1 ? () => onCopiesChanged(copies - 1) : null,
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 7),
                               child: Icon(Icons.remove, size: 13, color: copies > 1 ? palette.textPrimary : palette.textMuted),
                             ),
                           ),
@@ -161,8 +231,8 @@ class PrintJobSummaryPanel extends StatelessWidget {
                           InkWell(
                             onTap: () => onCopiesChanged(copies + 1),
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 6),
-                              child: Icon(Icons.add, size: 13, color: palette.textPrimary),
+                              padding: const EdgeInsets.symmetric(horizontal: 7),
+                              child: Icon(Icons.add, size: 13, color: palette.blue),
                             ),
                           ),
                         ],
@@ -230,18 +300,21 @@ class PrintJobSummaryPanel extends StatelessWidget {
               height: 36,
               child: OutlinedButton.icon(
                 onPressed: hasSource ? onExportPdf : null,
-                icon: Icon(Icons.picture_as_pdf_outlined, size: 15, color: hasSource ? palette.blue : palette.textMuted),
+                icon: Icon(Icons.picture_as_pdf_rounded, size: 15, color: hasSource ? palette.red : palette.textMuted),
                 label: Text(
                   isL805 ? 'EXPORT A4 PDF ($l805PagesCount PGS)' : 'EXPORT PDF',
                   style: TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
-                    color: hasSource ? palette.blue : palette.textMuted,
+                    color: hasSource ? palette.red : palette.textMuted,
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: hasSource ? palette.blue : palette.cardBorder),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  side: BorderSide(
+                    color: hasSource ? palette.red.withValues(alpha: 0.4) : palette.cardBorder,
+                  ),
+                  backgroundColor: hasSource ? palette.red.withValues(alpha: 0.06) : Colors.transparent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
                 ),
               ),
             ),
@@ -267,9 +340,10 @@ class PrintJobSummaryPanel extends StatelessWidget {
                 ),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: hasSource ? palette.green : palette.cardBorder,
+                backgroundColor: hasSource ? palette.blue : palette.cardBorder,
                 elevation: hasSource ? 2 : 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shadowColor: palette.blue.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
               ),
             ),
           ),
@@ -281,11 +355,15 @@ class PrintJobSummaryPanel extends StatelessWidget {
 
 class _JobSpecRow extends StatelessWidget {
   final IdCardPalette palette;
+  final IconData icon;
+  final Color iconColor;
   final String label;
   final String value;
 
   const _JobSpecRow({
     required this.palette,
+    required this.icon,
+    required this.iconColor,
     required this.label,
     required this.value,
   });
@@ -297,12 +375,16 @@ class _JobSpecRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 11, color: palette.textSecondary, fontWeight: FontWeight.w500),
-              overflow: TextOverflow.ellipsis,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: iconColor),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(fontSize: 11, color: palette.textSecondary, fontWeight: FontWeight.w500),
+              ),
+            ],
           ),
           const SizedBox(width: 8),
           Flexible(

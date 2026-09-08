@@ -11,6 +11,7 @@ import '../core/constants/paper_presets.dart';
 import '../core/models/crop_rect_data.dart';
 import '../core/models/crop_result.dart';
 import '../core/models/enhancement_config.dart';
+import '../core/models/id_card_entry.dart';
 import '../core/models/id_card_preset.dart';
 import '../core/models/id_card_workflow_type.dart';
 import '../core/models/l805_calibration.dart';
@@ -27,6 +28,8 @@ import '../services/storage/l805_calibration_storage.dart';
 import 'app_providers.dart';
 
 class IdCardStateSnapshot {
+  final List<IdCardEntry> cards;
+  final String? activeCardId;
   final CropRectData frontCrop;
   final CropRectData? backCrop;
   final bool hasBothSides;
@@ -42,6 +45,8 @@ class IdCardStateSnapshot {
   final bool l805PreviewFront;
 
   IdCardStateSnapshot({
+    this.cards = const [],
+    this.activeCardId,
     required this.frontCrop,
     required this.backCrop,
     required this.hasBothSides,
@@ -59,6 +64,11 @@ class IdCardStateSnapshot {
 }
 
 class IdCardState {
+  final List<IdCardEntry> cards;
+  final String? activeCardId;
+  final List<PrintLayout> currentLayouts;
+  final int activeSheetIndex;
+
   final Uint8List? rawSourceBytes;
   final bool isPdfSource;
   final String? fileName;
@@ -91,12 +101,14 @@ class IdCardState {
   final Uint8List? pendingEncryptedPdfBytes;
   final String? pendingEncryptedFileName;
   final String? passwordError;
+  final List<({Uint8List bytes, String fileName})> pendingEncryptedQueue;
 
   // Real print-shop workflow options
   final IdCardWorkflowType workflowType;
   final PvcOutputMode pvcMode;
   final List<Uint8List> dragonCards;
   final bool isDragonDuplex;
+  final bool showDragonCutLines;
 
   // Epson L805 PVC Tray features
   final int l805CardQuantity; // 1 or 2
@@ -107,6 +119,10 @@ class IdCardState {
   final PrintLayout? l805BackLayout;
 
   const IdCardState({
+    this.cards = const [],
+    this.activeCardId,
+    this.currentLayouts = const [],
+    this.activeSheetIndex = 0,
     this.rawSourceBytes,
     this.isPdfSource = false,
     this.fileName,
@@ -120,7 +136,7 @@ class IdCardState {
     this.backCrop,
     this.frontEnhancement = const EnhancementConfig(),
     this.backEnhancement = const EnhancementConfig(),
-    this.gapMm = 5.0,
+    this.gapMm = 0.5,
     this.marginMm = 4.0,
     this.printJobCopies = 1,
     this.swapFrontBack = false,
@@ -137,11 +153,13 @@ class IdCardState {
     this.pendingEncryptedPdfBytes,
     this.pendingEncryptedFileName,
     this.passwordError,
+    this.pendingEncryptedQueue = const [],
     this.workflowType = IdCardWorkflowType.photoPaperLamination,
     this.pvcMode = PvcOutputMode.l805Tray,
     this.dragonCards = const [],
     this.isDragonDuplex = true,
-    this.l805CardQuantity = 1,
+    this.showDragonCutLines = true,
+    this.l805CardQuantity = 2,
     this.l805PreviewFront = true,
     this.card2FrontBytes,
     this.card2BackBytes,
@@ -149,24 +167,24 @@ class IdCardState {
     this.l805BackLayout,
   });
 
-  bool get hasSource => rawSourceBytes != null && rawSourceBytes!.isNotEmpty;
+  bool get hasSource =>
+      cards.isNotEmpty || (rawSourceBytes != null && rawSourceBytes!.isNotEmpty);
   bool get canUndo => undoStack.isNotEmpty;
   bool get canRedo => redoStack.isNotEmpty;
+
+  IdCardEntry? get activeCard =>
+      cards.where((c) => c.id == activeCardId).firstOrNull ?? cards.firstOrNull;
+
+  int get totalSheetsCount =>
+      currentLayouts.isNotEmpty ? currentLayouts.length : (currentLayout != null ? 1 : 0);
+
+  int get totalFilesCount => cards.isNotEmpty ? cards.length : (hasSource ? 1 : 0);
 
   double get unitSellingPrice => workflowType.defaultPricePerCard;
 
   int get totalCardsCount {
-    if (workflowType == IdCardWorkflowType.photoPaperLamination) {
-      return 1;
-    } else if (workflowType == IdCardWorkflowType.epsonL805) {
-      return l805CardQuantity;
-    } else {
-      if (pvcMode == PvcOutputMode.dragonSheetDuplex) {
-        return 5;
-      } else {
-        return 10;
-      }
-    }
+    if (cards.isNotEmpty) return cards.length;
+    return 1;
   }
 
   double get calculatedSellingPrice => (unitSellingPrice * totalCardsCount * printJobCopies);
@@ -177,7 +195,7 @@ class IdCardState {
       return (6.5 * printJobCopies);
     } else if (workflowType == IdCardWorkflowType.epsonL805) {
       // PVC card blank = ₹12.0 each
-      return (12.0 * l805CardQuantity * printJobCopies);
+      return (12.0 * totalCardsCount * printJobCopies);
     } else {
       // 200x300mm Dragon Sheet = ₹45.0
       return (45.0 * printJobCopies);
@@ -189,6 +207,10 @@ class IdCardState {
   double get calculatedEstimatedProfit => calculatedSellingPrice - calculatedMaterialCost - calculatedInkCost;
 
   Uint8List? get activePageImageBytes {
+    final card = activeCard;
+    if (card != null) {
+      return card.activePageImageBytes;
+    }
     if (renderedPages.isNotEmpty && selectedPageIndex < renderedPages.length) {
       return renderedPages[selectedPageIndex];
     }
@@ -196,6 +218,11 @@ class IdCardState {
   }
 
   IdCardState copyWith({
+    List<IdCardEntry>? cards,
+    String? activeCardId,
+    bool clearActiveCardId = false,
+    List<PrintLayout>? currentLayouts,
+    int? activeSheetIndex,
     Uint8List? rawSourceBytes,
     bool? isPdfSource,
     String? fileName,
@@ -231,10 +258,12 @@ class IdCardState {
     String? pendingEncryptedFileName,
     String? passwordError,
     bool clearPasswordError = false,
+    List<({Uint8List bytes, String fileName})>? pendingEncryptedQueue,
     IdCardWorkflowType? workflowType,
     PvcOutputMode? pvcMode,
     List<Uint8List>? dragonCards,
     bool? isDragonDuplex,
+    bool? showDragonCutLines,
     int? l805CardQuantity,
     bool? l805PreviewFront,
     Uint8List? card2FrontBytes,
@@ -246,6 +275,10 @@ class IdCardState {
     bool clearL805BackLayout = false,
   }) {
     return IdCardState(
+      cards: cards ?? this.cards,
+      activeCardId: clearActiveCardId ? null : (activeCardId ?? this.activeCardId),
+      currentLayouts: currentLayouts ?? this.currentLayouts,
+      activeSheetIndex: activeSheetIndex ?? this.activeSheetIndex,
       rawSourceBytes: rawSourceBytes ?? this.rawSourceBytes,
       isPdfSource: isPdfSource ?? this.isPdfSource,
       fileName: fileName ?? this.fileName,
@@ -276,10 +309,12 @@ class IdCardState {
       pendingEncryptedPdfBytes: clearPendingEncryptedBytes ? null : (pendingEncryptedPdfBytes ?? this.pendingEncryptedPdfBytes),
       pendingEncryptedFileName: pendingEncryptedFileName ?? this.pendingEncryptedFileName,
       passwordError: clearPasswordError ? null : (passwordError ?? this.passwordError),
+      pendingEncryptedQueue: pendingEncryptedQueue ?? this.pendingEncryptedQueue,
       workflowType: workflowType ?? this.workflowType,
       pvcMode: pvcMode ?? this.pvcMode,
       dragonCards: dragonCards ?? this.dragonCards,
       isDragonDuplex: isDragonDuplex ?? this.isDragonDuplex,
+      showDragonCutLines: showDragonCutLines ?? this.showDragonCutLines,
       l805CardQuantity: l805CardQuantity ?? this.l805CardQuantity,
       l805PreviewFront: l805PreviewFront ?? this.l805PreviewFront,
       card2FrontBytes: clearCard2FrontBytes ? null : (card2FrontBytes ?? this.card2FrontBytes),
@@ -305,8 +340,31 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     } catch (_) {}
   }
 
+  /// Resolves the effective back crop, ensuring back side is always available
+  static CropRectData _resolveEffectiveBackCrop(CropRectData frontCrop, CropRectData? detectedBackCrop) {
+    if (detectedBackCrop != null) return detectedBackCrop;
+    if (frontCrop.left + frontCrop.width <= 0.5) {
+      return CropRectData(
+        left: (frontCrop.left + 0.5).clamp(0.0, 0.95),
+        top: frontCrop.top,
+        width: frontCrop.width,
+        height: frontCrop.height,
+      );
+    } else if (frontCrop.top + frontCrop.height <= 0.5) {
+      return CropRectData(
+        left: frontCrop.left,
+        top: (frontCrop.top + 0.5).clamp(0.0, 0.95),
+        width: frontCrop.width,
+        height: frontCrop.height,
+      );
+    }
+    return frontCrop;
+  }
+
   void _pushUndo() {
     final snapshot = IdCardStateSnapshot(
+      cards: List.from(state.cards),
+      activeCardId: state.activeCardId,
       frontCrop: state.frontCrop,
       backCrop: state.backCrop,
       hasBothSides: state.hasBothSides,
@@ -324,6 +382,88 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     final newUndo = [...state.undoStack, snapshot];
     if (newUndo.length > 20) newUndo.removeAt(0);
     state = state.copyWith(undoStack: newUndo, redoStack: []);
+  }
+
+  void _updateActiveCardInList(IdCardEntry Function(IdCardEntry) updateFn) {
+    final activeId = state.activeCardId ?? (state.cards.isNotEmpty ? state.cards.first.id : null);
+    if (activeId == null) return;
+
+    final newCards = state.cards.map((c) {
+      if (c.id == activeId) {
+        return updateFn(c);
+      }
+      return c;
+    }).toList();
+
+    state = state.copyWith(cards: newCards);
+  }
+
+  /// Sets which card in the multi-card list is actively selected for editing
+  void setActiveCardId(String cardId) {
+    if (state.activeCardId == cardId) return;
+    final targetCard = state.cards.where((c) => c.id == cardId).firstOrNull;
+    if (targetCard == null) return;
+
+    // Automatically navigate to the sheet that contains this card
+    int targetSheetIndex = state.activeSheetIndex;
+    if (state.currentLayouts.isNotEmpty) {
+      for (int i = 0; i < state.currentLayouts.length; i++) {
+        if (state.currentLayouts[i].items.any((item) => item.groupId == cardId)) {
+          targetSheetIndex = i;
+          break;
+        }
+      }
+    }
+
+    final activeLayout = state.currentLayouts.isNotEmpty && targetSheetIndex < state.currentLayouts.length
+        ? state.currentLayouts[targetSheetIndex]
+        : state.currentLayout;
+
+    state = state.copyWith(
+      activeCardId: cardId,
+      activeSheetIndex: targetSheetIndex,
+      currentLayout: activeLayout,
+      fileName: targetCard.name,
+      rawSourceBytes: targetCard.rawBytes,
+      isPdfSource: targetCard.isPdf,
+      renderedPages: targetCard.renderedPages,
+      selectedPageIndex: targetCard.selectedPageIndex,
+      frontCrop: targetCard.frontCrop,
+      backCrop: targetCard.backCrop,
+      clearBackCrop: targetCard.backCrop == null,
+      hasBothSides: targetCard.hasBothSides,
+      swapFrontBack: targetCard.swapFrontBack,
+      frontEnhancement: targetCard.frontEnhancement,
+      backEnhancement: targetCard.backEnhancement,
+      processedFrontBytes: targetCard.frontBytes,
+      processedBackBytes: targetCard.backBytes,
+      clearProcessedBackBytes: targetCard.backBytes == null,
+    );
+  }
+
+  /// Selects active sheet in multi-sheet preview
+  void setActiveSheetIndex(int index) {
+    if (state.currentLayouts.isEmpty) return;
+    final clamped = index.clamp(0, state.currentLayouts.length - 1);
+    state = state.copyWith(
+      activeSheetIndex: clamped,
+      currentLayout: state.currentLayouts[clamped],
+      l805PreviewFront: clamped.isEven,
+    );
+  }
+
+  void nextSheet() {
+    if (state.currentLayouts.isEmpty) return;
+    if (state.activeSheetIndex < state.currentLayouts.length - 1) {
+      setActiveSheetIndex(state.activeSheetIndex + 1);
+    }
+  }
+
+  void prevSheet() {
+    if (state.currentLayouts.isEmpty) return;
+    if (state.activeSheetIndex > 0) {
+      setActiveSheetIndex(state.activeSheetIndex - 1);
+    }
   }
 
   /// Loads PDF or Image document and runs dynamic Aadhaar detection & layout pipeline
@@ -388,15 +528,10 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
 
       final workingImageBytes = pages.first;
 
-      // Dynamic Content & Boundary Detection
-      final detection = await DocumentDetector.detectIDCard(
-        imageBytes: workingImageBytes,
-        preset: state.idCardPreset,
-      );
-
-      final frontCrop = detection.frontCrop;
-      final backCrop = detection.backCrop;
-      final hasBoth = backCrop != null;
+      // By default no auto detect: use full standard crop
+      const frontCrop = CropRectData();
+      const backCrop = CropRectData();
+      const hasBoth = true;
 
       // Extract and enhance cards
       final frontBytes = await ImageProcessor.processCardAsync(
@@ -407,41 +542,45 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         targetHeightMm: state.idCardPreset.heightMm,
       );
 
-      Uint8List? backBytes;
-      if (hasBoth) {
-        backBytes = await ImageProcessor.processCardAsync(
-          sourceBytes: workingImageBytes,
-          cropData: backCrop,
-          enhancement: state.backEnhancement,
-          targetWidthMm: state.idCardPreset.widthMm,
-          targetHeightMm: state.idCardPreset.heightMm,
-        );
-      }
+      final backSource = pages.length >= 2 ? pages[1] : workingImageBytes;
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: backSource,
+        cropData: backCrop,
+        enhancement: state.backEnhancement,
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
 
-      // Calculate 4R Layout
-      final layout = LayoutEngine.calculateIdCardLayout(
-        paperPreset: state.paperPreset,
-        idPreset: state.idCardPreset,
-        frontImageBytes: frontBytes,
-        backImageBytes: backBytes,
-        swapFrontBack: state.swapFrontBack,
-        gapMm: state.gapMm,
-        marginMm: state.marginMm,
-        orientation: state.orientation,
+      final cardId = _uuid.v4();
+      final newCard = IdCardEntry(
+        id: cardId,
+        name: fileName,
+        rawBytes: bytes,
+        isPdf: isPdf,
+        renderedPages: pages,
+        selectedPageIndex: 0,
+        frontCrop: frontCrop,
+        backCrop: backCrop,
+        hasBothSides: hasBoth,
+        frontBytes: frontBytes,
+        backBytes: backBytes,
       );
 
       state = state.copyWith(
+        cards: [newCard],
+        activeCardId: cardId,
         renderedPages: pages,
         frontCrop: frontCrop,
         backCrop: backCrop,
         hasBothSides: hasBoth,
-        detectionResult: detection,
+        detectionResult: null,
         processedFrontBytes: frontBytes,
         processedBackBytes: backBytes,
-        currentLayout: layout,
         isProcessing: false,
         isDetecting: false,
       );
+
+      _recalculateLayout();
 
       // Auto-save draft so document state is preserved across refresh / app close
       if (!isRestoringDraft) {
@@ -467,6 +606,529 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     }
   }
 
+  /// Replaces the currently active card with a new document
+  Future<void> replaceActiveCard({
+    required Uint8List bytes,
+    required String fileName,
+    required bool isPdf,
+  }) async {
+    if (state.cards.isEmpty) {
+      await loadDocument(bytes: bytes, fileName: fileName, isPdf: isPdf);
+      return;
+    }
+
+    final activeId = state.activeCardId ?? state.cards.first.id;
+    final cardIndex = state.cards.indexWhere((c) => c.id == activeId);
+    if (cardIndex == -1) {
+      await addCardDocument(bytes: bytes, fileName: fileName, isPdf: isPdf);
+      return;
+    }
+
+    if (isPdf) {
+      final inspection = PdfInspector.inspectPdf(bytes);
+      if (inspection.status == PdfStatus.passwordProtected) {
+        state = state.copyWith(
+          isPasswordRequired: true,
+          pendingEncryptedPdfBytes: bytes,
+          pendingEncryptedFileName: fileName,
+          isProcessing: false,
+          isDetecting: false,
+          clearError: true,
+          clearPasswordError: true,
+        );
+        return;
+      } else if (inspection.status == PdfStatus.malformed) {
+        state = state.copyWith(
+          isProcessing: false,
+          isDetecting: false,
+          errorMessage: 'Unable to read this PDF. The file may be damaged or unsupported.',
+        );
+        return;
+      }
+    }
+
+    _pushUndo();
+    state = state.copyWith(isProcessing: true, isDetecting: true, clearError: true);
+
+    try {
+      List<Uint8List> pages = [];
+      if (isPdf) {
+        pages = await PdfRasterizer.rasterizeAllPages(pdfBytes: bytes, dpi: 300);
+      } else {
+        pages = [bytes];
+      }
+
+      if (pages.isEmpty) {
+        state = state.copyWith(isProcessing: false, isDetecting: false, errorMessage: 'Unable to render document.');
+        return;
+      }
+
+      final workingImageBytes = pages.first;
+
+      // By default no auto detect: use full standard crop
+      const frontCrop = CropRectData();
+      const backCrop = CropRectData();
+      const hasBoth = true;
+
+      final frontBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: workingImageBytes,
+        cropData: frontCrop,
+        enhancement: const EnhancementConfig(),
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      final backSource = pages.length >= 2 ? pages[1] : workingImageBytes;
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: backSource,
+        cropData: backCrop,
+        enhancement: const EnhancementConfig(),
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      final updatedCard = IdCardEntry(
+        id: activeId,
+        name: fileName,
+        rawBytes: bytes,
+        isPdf: isPdf,
+        renderedPages: pages,
+        selectedPageIndex: 0,
+        frontCrop: frontCrop,
+        backCrop: backCrop,
+        hasBothSides: hasBoth,
+        frontBytes: frontBytes,
+        backBytes: backBytes,
+      );
+
+      final updatedCards = List<IdCardEntry>.from(state.cards);
+      updatedCards[cardIndex] = updatedCard;
+
+      state = state.copyWith(
+        cards: updatedCards,
+        activeCardId: activeId,
+        rawSourceBytes: bytes,
+        fileName: fileName,
+        isPdfSource: isPdf,
+        renderedPages: pages,
+        selectedPageIndex: 0,
+        frontCrop: frontCrop,
+        backCrop: backCrop,
+        clearBackCrop: false,
+        hasBothSides: hasBoth,
+        detectionResult: null,
+        processedFrontBytes: frontBytes,
+        processedBackBytes: backBytes,
+        clearProcessedBackBytes: false,
+        isProcessing: false,
+        isDetecting: false,
+        clearError: true,
+      );
+
+      _recalculateLayout();
+      saveDraft();
+    } catch (e) {
+      debugPrint('Error replacing card document: $e');
+      final errStr = e.toString().toLowerCase();
+      if (e is PdfPasswordException || errStr.contains('password') || errStr.contains('encrypted')) {
+        state = state.copyWith(
+          isPasswordRequired: true,
+          pendingEncryptedPdfBytes: bytes,
+          pendingEncryptedFileName: fileName,
+          isProcessing: false,
+          isDetecting: false,
+          clearError: true,
+          clearPasswordError: true,
+        );
+      } else {
+        state = state.copyWith(
+          isProcessing: false,
+          isDetecting: false,
+          errorMessage: e is PdfMalformedException ? e.message : 'Failed to replace card: $e',
+        );
+      }
+    }
+  }
+
+  /// Appends an additional ID card to the current project
+  Future<void> addCardDocument({
+    required Uint8List bytes,
+    required String fileName,
+    required bool isPdf,
+  }) async {
+    // If PDF, inspect encryption and validity first
+    if (isPdf) {
+      final inspection = PdfInspector.inspectPdf(bytes);
+      if (inspection.status == PdfStatus.passwordProtected) {
+        state = state.copyWith(
+          isPasswordRequired: true,
+          pendingEncryptedPdfBytes: bytes,
+          pendingEncryptedFileName: fileName,
+          isProcessing: false,
+          isDetecting: false,
+          clearError: true,
+          clearPasswordError: true,
+        );
+        return;
+      } else if (inspection.status == PdfStatus.malformed) {
+        state = state.copyWith(
+          isProcessing: false,
+          isDetecting: false,
+          errorMessage: 'Unable to read this PDF. The file may be damaged or unsupported.',
+        );
+        return;
+      }
+    }
+
+    _pushUndo();
+    state = state.copyWith(isProcessing: true, isDetecting: true, clearError: true);
+
+    try {
+      List<Uint8List> pages = [];
+      if (isPdf) {
+        pages = await PdfRasterizer.rasterizeAllPages(pdfBytes: bytes, dpi: 300);
+      } else {
+        pages = [bytes];
+      }
+
+      if (pages.isEmpty) {
+        state = state.copyWith(isProcessing: false, isDetecting: false, errorMessage: 'Unable to render document.');
+        return;
+      }
+
+      final workingImageBytes = pages.first;
+
+      // By default no auto detect: use full standard crop
+      const frontCrop = CropRectData();
+      const backCrop = CropRectData();
+      const hasBoth = true;
+
+      final frontBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: workingImageBytes,
+        cropData: frontCrop,
+        enhancement: const EnhancementConfig(),
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      final backSource = pages.length >= 2 ? pages[1] : workingImageBytes;
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: backSource,
+        cropData: backCrop,
+        enhancement: const EnhancementConfig(),
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      final cardId = _uuid.v4();
+      final newCard = IdCardEntry(
+        id: cardId,
+        name: fileName,
+        rawBytes: bytes,
+        isPdf: isPdf,
+        renderedPages: pages,
+        selectedPageIndex: 0,
+        frontCrop: frontCrop,
+        backCrop: backCrop,
+        hasBothSides: hasBoth,
+        frontBytes: frontBytes,
+        backBytes: backBytes,
+      );
+
+      final newCards = [...state.cards, newCard];
+
+      // BY DEFAULT MAKE LAMINITION IF FILE HAS 1 IF MORE THAN 1 THEN dRAGONSHEET
+      IdCardWorkflowType targetWf = state.workflowType;
+      PaperPreset targetPaper = state.paperPreset;
+      double targetGap = state.gapMm;
+      double targetMargin = state.marginMm;
+
+      if (newCards.length > 1 && state.workflowType == IdCardWorkflowType.photoPaperLamination) {
+        targetWf = IdCardWorkflowType.dragonSheet;
+        targetPaper = StandardPaperPresets.dragonSheet200x300;
+        targetGap = 0.5;
+        targetMargin = 2.0;
+      }
+
+      state = state.copyWith(
+        cards: newCards,
+        activeCardId: cardId,
+        rawSourceBytes: bytes,
+        fileName: fileName,
+        isPdfSource: isPdf,
+        renderedPages: pages,
+        selectedPageIndex: 0,
+        frontCrop: frontCrop,
+        backCrop: backCrop,
+        clearBackCrop: false,
+        hasBothSides: hasBoth,
+        detectionResult: null,
+        processedFrontBytes: frontBytes,
+        processedBackBytes: backBytes,
+        clearProcessedBackBytes: false,
+        workflowType: targetWf,
+        paperPreset: targetPaper,
+        gapMm: targetGap,
+        marginMm: targetMargin,
+        isProcessing: false,
+        isDetecting: false,
+        clearError: true,
+      );
+
+      _recalculateLayout();
+      saveDraft();
+    } catch (e) {
+      debugPrint('Error adding card document: $e');
+      final errStr = e.toString().toLowerCase();
+      if (e is PdfPasswordException || errStr.contains('password') || errStr.contains('encrypted')) {
+        state = state.copyWith(
+          isPasswordRequired: true,
+          pendingEncryptedPdfBytes: bytes,
+          pendingEncryptedFileName: fileName,
+          isProcessing: false,
+          isDetecting: false,
+          clearError: true,
+          clearPasswordError: true,
+        );
+      } else {
+        state = state.copyWith(
+          isProcessing: false,
+          isDetecting: false,
+          errorMessage: e is PdfMalformedException ? e.message : 'Failed to add card: $e',
+        );
+      }
+    }
+  }
+
+  /// Loads multiple documents at once (e.g. multi-file drag-drop or picker)
+  Future<void> loadMultipleDocuments(List<({Uint8List bytes, String fileName, bool isPdf})> fileList) async {
+    if (fileList.isEmpty) return;
+
+    if (fileList.length == 1 && state.cards.isEmpty) {
+      final f = fileList.first;
+      await loadDocument(bytes: f.bytes, fileName: f.fileName, isPdf: f.isPdf);
+      return;
+    }
+
+    if (fileList.length == 1 && state.cards.isNotEmpty) {
+      final f = fileList.first;
+      await addCardDocument(bytes: f.bytes, fileName: f.fileName, isPdf: f.isPdf);
+      return;
+    }
+
+    _pushUndo();
+    state = state.copyWith(isProcessing: true, isDetecting: true, clearError: true);
+
+    final newEntries = <IdCardEntry>[];
+    final encryptedQueue = <({Uint8List bytes, String fileName})>[];
+
+    for (final item in fileList) {
+      if (item.isPdf) {
+        final inspection = PdfInspector.inspectPdf(item.bytes);
+        if (inspection.status == PdfStatus.passwordProtected) {
+          encryptedQueue.add((bytes: item.bytes, fileName: item.fileName));
+          continue;
+        }
+      }
+
+      try {
+        List<Uint8List> pages = [];
+        if (item.isPdf) {
+          pages = await PdfRasterizer.rasterizeAllPages(pdfBytes: item.bytes, dpi: 300);
+        } else {
+          pages = [item.bytes];
+        }
+
+        if (pages.isEmpty) continue;
+
+        final workingBytes = pages.first;
+
+        // By default no auto detect: use full standard crop
+        const frontCrop = CropRectData();
+        const backCrop = CropRectData();
+        const hasBoth = true;
+
+        final frontBytes = await ImageProcessor.processCardAsync(
+          sourceBytes: workingBytes,
+          cropData: frontCrop,
+          enhancement: const EnhancementConfig(),
+          targetWidthMm: state.idCardPreset.widthMm,
+          targetHeightMm: state.idCardPreset.heightMm,
+        );
+
+        final backSource = pages.length >= 2 ? pages[1] : workingBytes;
+        final backBytes = await ImageProcessor.processCardAsync(
+          sourceBytes: backSource,
+          cropData: backCrop,
+          enhancement: const EnhancementConfig(),
+          targetWidthMm: state.idCardPreset.widthMm,
+          targetHeightMm: state.idCardPreset.heightMm,
+        );
+
+        newEntries.add(IdCardEntry(
+          id: _uuid.v4(),
+          name: item.fileName,
+          rawBytes: item.bytes,
+          isPdf: item.isPdf,
+          renderedPages: pages,
+          selectedPageIndex: 0,
+          frontCrop: frontCrop,
+          backCrop: backCrop,
+          hasBothSides: hasBoth,
+          frontBytes: frontBytes,
+          backBytes: backBytes,
+        ));
+      } catch (e) {
+        debugPrint('Error processing file ${item.fileName} in batch: $e');
+        if (e is PdfPasswordException) {
+          encryptedQueue.add((bytes: item.bytes, fileName: item.fileName));
+        }
+      }
+    }
+
+    if (newEntries.isEmpty) {
+      if (encryptedQueue.isNotEmpty) {
+        final firstEncrypted = encryptedQueue.first;
+        final remainingQueue = encryptedQueue.sublist(1);
+        state = state.copyWith(
+          isPasswordRequired: true,
+          pendingEncryptedPdfBytes: firstEncrypted.bytes,
+          pendingEncryptedFileName: firstEncrypted.fileName,
+          pendingEncryptedQueue: remainingQueue,
+          isProcessing: false,
+          isDetecting: false,
+          clearError: true,
+          clearPasswordError: true,
+        );
+        return;
+      }
+      state = state.copyWith(
+        isProcessing: false,
+        isDetecting: false,
+        errorMessage: 'Unable to process the selected files.',
+      );
+      return;
+    }
+
+    final allCards = [...state.cards, ...newEntries];
+    final active = state.cards.isEmpty ? allCards.first : (state.activeCard ?? allCards.first);
+
+    // BY DEFAULT MAKE LAMINITION IF FILE HAS 1 IF MORE THAN 1 THEN dRAGONSHEET
+    IdCardWorkflowType targetWf = state.workflowType;
+    PaperPreset targetPaper = state.paperPreset;
+    double targetGap = state.gapMm;
+    double targetMargin = state.marginMm;
+
+    if (allCards.length > 1 && state.workflowType == IdCardWorkflowType.photoPaperLamination) {
+      targetWf = IdCardWorkflowType.dragonSheet;
+      targetPaper = StandardPaperPresets.dragonSheet200x300;
+      targetGap = 0.5;
+      targetMargin = 2.0;
+    } else if (allCards.length == 1 && state.workflowType == IdCardWorkflowType.dragonSheet) {
+      targetWf = IdCardWorkflowType.photoPaperLamination;
+      targetPaper = StandardPaperPresets.fourR;
+      targetGap = 0.5;
+      targetMargin = 4.0;
+    }
+
+    state = state.copyWith(
+      cards: allCards,
+      activeCardId: active.id,
+      rawSourceBytes: active.rawBytes,
+      fileName: active.name,
+      isPdfSource: active.isPdf,
+      renderedPages: active.renderedPages,
+      selectedPageIndex: active.selectedPageIndex,
+      frontCrop: active.frontCrop,
+      backCrop: active.backCrop,
+      clearBackCrop: active.backCrop == null,
+      hasBothSides: active.hasBothSides,
+      processedFrontBytes: active.frontBytes,
+      processedBackBytes: active.backBytes,
+      clearProcessedBackBytes: active.backBytes == null,
+      workflowType: targetWf,
+      paperPreset: targetPaper,
+      gapMm: targetGap,
+      marginMm: targetMargin,
+      isProcessing: false,
+      isDetecting: false,
+      clearError: true,
+    );
+
+    _recalculateLayout();
+    saveDraft();
+
+    if (encryptedQueue.isNotEmpty) {
+      final firstEncrypted = encryptedQueue.first;
+      final remainingQueue = encryptedQueue.sublist(1);
+      state = state.copyWith(
+        isPasswordRequired: true,
+        pendingEncryptedPdfBytes: firstEncrypted.bytes,
+        pendingEncryptedFileName: firstEncrypted.fileName,
+        pendingEncryptedQueue: remainingQueue,
+        clearPasswordError: true,
+      );
+    }
+  }
+
+  /// Removes a card from the project
+  void removeCard(String cardId) {
+    _pushUndo();
+    final remainingCards = state.cards.where((c) => c.id != cardId).toList();
+    if (remainingCards.isEmpty) {
+      closeCurrentProject();
+      return;
+    }
+
+    String nextActiveId = state.activeCardId ?? remainingCards.first.id;
+    if (nextActiveId == cardId) {
+      nextActiveId = remainingCards.first.id;
+    }
+
+    final nextActive = remainingCards.firstWhere((c) => c.id == nextActiveId);
+
+    // BY DEFAULT MAKE LAMINITION IF FILE HAS 1 IF MORE THAN 1 THEN dRAGONSHEET
+    IdCardWorkflowType targetWf = state.workflowType;
+    PaperPreset targetPaper = state.paperPreset;
+    double targetGap = state.gapMm;
+    double targetMargin = state.marginMm;
+
+    if (remainingCards.length == 1 && state.workflowType == IdCardWorkflowType.dragonSheet) {
+      targetWf = IdCardWorkflowType.photoPaperLamination;
+      targetPaper = StandardPaperPresets.fourR;
+      targetGap = 0.5;
+      targetMargin = 4.0;
+    }
+
+    state = state.copyWith(
+      cards: remainingCards,
+      activeCardId: nextActiveId,
+      rawSourceBytes: nextActive.rawBytes,
+      fileName: nextActive.name,
+      isPdfSource: nextActive.isPdf,
+      renderedPages: nextActive.renderedPages,
+      selectedPageIndex: nextActive.selectedPageIndex,
+      frontCrop: nextActive.frontCrop,
+      backCrop: nextActive.backCrop,
+      clearBackCrop: nextActive.backCrop == null,
+      hasBothSides: nextActive.hasBothSides,
+      swapFrontBack: nextActive.swapFrontBack,
+      frontEnhancement: nextActive.frontEnhancement,
+      backEnhancement: nextActive.backEnhancement,
+      processedFrontBytes: nextActive.frontBytes,
+      processedBackBytes: nextActive.backBytes,
+      clearProcessedBackBytes: nextActive.backBytes == null,
+      workflowType: targetWf,
+      paperPreset: targetPaper,
+      gapMm: targetGap,
+      marginMm: targetMargin,
+      clearError: true,
+    );
+
+    _recalculateLayout();
+    saveDraft();
+  }
+
   /// Unlocks password-protected PDF and loads it
   Future<bool> unlockPasswordProtectedPdf(String password) async {
     final pendingBytes = state.pendingEncryptedPdfBytes;
@@ -483,14 +1145,36 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     if (unlockResult.success && unlockResult.decryptedBytes != null) {
       final decrypted = unlockResult.decryptedBytes!;
 
-      // Explicitly clear password required state first
-      state = state.copyWith(
-        isPasswordRequired: false,
-        clearPendingEncryptedBytes: true,
-        clearPasswordError: true,
-      );
+      final hasMoreInQueue = state.pendingEncryptedQueue.isNotEmpty;
+      final nextEncrypted = hasMoreInQueue ? state.pendingEncryptedQueue.first : null;
+      final remainingQueue = hasMoreInQueue ? state.pendingEncryptedQueue.sublist(1) : const <({Uint8List bytes, String fileName})>[];
 
-      await loadDocument(bytes: decrypted, fileName: fName, isPdf: true);
+      // Add the newly decrypted document to the project
+      if (state.cards.isEmpty) {
+        await loadDocument(bytes: decrypted, fileName: fName, isPdf: true);
+      } else {
+        await addCardDocument(bytes: decrypted, fileName: fName, isPdf: true);
+      }
+
+      // If there are more encrypted files waiting in queue, prompt for the next one
+      if (nextEncrypted != null) {
+        state = state.copyWith(
+          isPasswordRequired: true,
+          pendingEncryptedPdfBytes: nextEncrypted.bytes,
+          pendingEncryptedFileName: nextEncrypted.fileName,
+          pendingEncryptedQueue: remainingQueue,
+          isProcessing: false,
+          clearPasswordError: true,
+        );
+      } else {
+        state = state.copyWith(
+          isPasswordRequired: false,
+          clearPendingEncryptedBytes: true,
+          clearPasswordError: true,
+          pendingEncryptedQueue: const [],
+          isProcessing: false,
+        );
+      }
       return true;
     } else {
       state = state.copyWith(
@@ -502,11 +1186,25 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   }
 
   void cancelPasswordPrompt() {
-    state = state.copyWith(
-      isPasswordRequired: false,
-      clearPendingEncryptedBytes: true,
-      clearPasswordError: true,
-    );
+    final hasMoreInQueue = state.pendingEncryptedQueue.isNotEmpty;
+    if (hasMoreInQueue) {
+      final nextEncrypted = state.pendingEncryptedQueue.first;
+      final remainingQueue = state.pendingEncryptedQueue.sublist(1);
+      state = state.copyWith(
+        isPasswordRequired: true,
+        pendingEncryptedPdfBytes: nextEncrypted.bytes,
+        pendingEncryptedFileName: nextEncrypted.fileName,
+        pendingEncryptedQueue: remainingQueue,
+        clearPasswordError: true,
+      );
+    } else {
+      state = state.copyWith(
+        isPasswordRequired: false,
+        clearPendingEncryptedBytes: true,
+        clearPasswordError: true,
+        pendingEncryptedQueue: const [],
+      );
+    }
   }
 
   /// Manually re-runs dynamic auto-detection on the currently loaded document page
@@ -523,8 +1221,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       );
 
       final frontCrop = detection.frontCrop;
-      final backCrop = detection.backCrop;
-      final hasBoth = backCrop != null;
+      final backCrop = _resolveEffectiveBackCrop(frontCrop, detection.backCrop);
+      const hasBoth = true;
 
       final frontBytes = await ImageProcessor.processCardAsync(
         sourceBytes: activeBytes,
@@ -534,16 +1232,13 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         targetHeightMm: state.idCardPreset.heightMm,
       );
 
-      Uint8List? backBytes;
-      if (hasBoth) {
-        backBytes = await ImageProcessor.processCardAsync(
-          sourceBytes: activeBytes,
-          cropData: backCrop,
-          enhancement: state.backEnhancement,
-          targetWidthMm: state.idCardPreset.widthMm,
-          targetHeightMm: state.idCardPreset.heightMm,
-        );
-      }
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: activeBytes,
+        cropData: backCrop,
+        enhancement: state.backEnhancement,
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
 
       final layout = LayoutEngine.calculateIdCardLayout(
         paperPreset: state.paperPreset,
@@ -592,8 +1287,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       );
 
       final frontCrop = detection.frontCrop;
-      final backCrop = detection.backCrop;
-      final hasBoth = backCrop != null;
+      final backCrop = _resolveEffectiveBackCrop(frontCrop, detection.backCrop);
+      const hasBoth = true;
 
       final frontBytes = await ImageProcessor.processCardAsync(
         sourceBytes: pageBytes,
@@ -603,16 +1298,13 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         targetHeightMm: state.idCardPreset.heightMm,
       );
 
-      Uint8List? backBytes;
-      if (hasBoth) {
-        backBytes = await ImageProcessor.processCardAsync(
-          sourceBytes: pageBytes,
-          cropData: backCrop,
-          enhancement: state.backEnhancement,
-          targetWidthMm: state.idCardPreset.widthMm,
-          targetHeightMm: state.idCardPreset.heightMm,
-        );
-      }
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: pageBytes,
+        cropData: backCrop,
+        enhancement: state.backEnhancement,
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
 
       final layout = LayoutEngine.calculateIdCardLayout(
         paperPreset: state.paperPreset,
@@ -652,6 +1344,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   /// Assigns a specific detected candidate as the Back Side
   Future<void> setCandidateAsBack(DetectedCandidate candidate) async {
     _pushUndo();
+    _updateActiveCardInList((c) => c.copyWith(backCrop: candidate.crop, hasBothSides: true));
     state = state.copyWith(backCrop: candidate.crop, hasBothSides: true);
     await _reprocess();
   }
@@ -675,7 +1368,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
             : null,
       );
 
-      final rawFront = state.activePageImageBytes ?? cropResult.croppedBytes;
+      final active = state.activeCard;
+      final rawFront = active?.frontSourceImageBytes ?? state.activePageImageBytes ?? cropResult.croppedBytes;
       final frontBytes = await compute(
         _resizeCardWorker,
         _ResizeParams(
@@ -688,23 +1382,18 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         ),
       );
 
-      final layout = LayoutEngine.calculateIdCardLayout(
-        paperPreset: state.paperPreset,
-        idPreset: state.idCardPreset,
-        frontImageBytes: frontBytes,
-        backImageBytes: state.hasBothSides ? state.processedBackBytes : null,
-        swapFrontBack: state.swapFrontBack,
-        gapMm: state.gapMm,
-        marginMm: state.marginMm,
-        orientation: state.orientation,
-      );
+      _updateActiveCardInList((c) => c.copyWith(
+        frontCrop: frontCrop,
+        frontBytes: frontBytes,
+      ));
 
       state = state.copyWith(
         frontCrop: frontCrop,
         processedFrontBytes: frontBytes,
-        currentLayout: layout,
         isProcessing: false,
       );
+
+      _recalculateLayout();
     } catch (e) {
       debugPrint('Error applying front crop: $e');
       state = state.copyWith(isProcessing: false, errorMessage: 'Failed to apply front crop: $e');
@@ -730,7 +1419,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
             : null,
       );
 
-      final rawBack = state.activePageImageBytes ?? cropResult.croppedBytes;
+      final active = state.activeCard;
+      final rawBack = active?.backSourceImageBytes ?? state.activePageImageBytes ?? cropResult.croppedBytes;
       final backBytes = await compute(
         _resizeCardWorker,
         _ResizeParams(
@@ -743,31 +1433,27 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         ),
       );
 
-      final layout = LayoutEngine.calculateIdCardLayout(
-        paperPreset: state.paperPreset,
-        idPreset: state.idCardPreset,
-        frontImageBytes: state.processedFrontBytes!,
-        backImageBytes: backBytes,
-        swapFrontBack: state.swapFrontBack,
-        gapMm: state.gapMm,
-        marginMm: state.marginMm,
-        orientation: state.orientation,
-      );
+      _updateActiveCardInList((c) => c.copyWith(
+        backCrop: backCrop,
+        backBytes: backBytes,
+        hasBothSides: true,
+      ));
 
       state = state.copyWith(
         backCrop: backCrop,
         hasBothSides: true,
         processedBackBytes: backBytes,
-        currentLayout: layout,
         isProcessing: false,
       );
+
+      _recalculateLayout();
     } catch (e) {
       debugPrint('Error applying back crop: $e');
       state = state.copyWith(isProcessing: false, errorMessage: 'Failed to apply back crop: $e');
     }
   }
 
-  /// Toggles whether Back Side is included on the 4R sheet
+  /// Toggles whether Back Side is included on the sheet
   Future<void> toggleHasBothSides(bool hasBoth) async {
     _pushUndo();
     if (hasBoth && state.backCrop == null) {
@@ -777,8 +1463,10 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         width: state.frontCrop.width,
         height: state.frontCrop.height,
       );
+      _updateActiveCardInList((c) => c.copyWith(hasBothSides: true, backCrop: fallbackBack));
       state = state.copyWith(hasBothSides: true, backCrop: fallbackBack);
     } else {
+      _updateActiveCardInList((c) => c.copyWith(hasBothSides: hasBoth));
       state = state.copyWith(hasBothSides: hasBoth);
     }
     await _reprocess();
@@ -787,6 +1475,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   /// Swaps front and back placement
   void setSwapFrontBack(bool swap) {
     _pushUndo();
+    _updateActiveCardInList((c) => c.copyWith(swapFrontBack: swap));
     state = state.copyWith(swapFrontBack: swap);
     _recalculateLayout();
   }
@@ -796,6 +1485,229 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     _pushUndo();
     state = state.copyWith(gapMm: gapMm.clamp(0.0, 30.0));
     _recalculateLayout();
+  }
+
+  /// Toggles red dotted cutting guidelines on Dragon Sheet PVC layout
+  void setShowDragonCutLines(bool show) {
+    if (state.showDragonCutLines == show) return;
+    state = state.copyWith(showDragonCutLines: show);
+    _recalculateLayout();
+  }
+
+  /// Merges two cards in the list into one single duplex card (Front from card 1, Back from card 2).
+  Future<void> mergeCardsAsDuplex(String frontCardId, String backCardId) async {
+    _pushUndo();
+    final cards = List<IdCardEntry>.from(state.cards);
+    final frontIndex = cards.indexWhere((c) => c.id == frontCardId);
+    final backIndex = cards.indexWhere((c) => c.id == backCardId);
+    if (frontIndex == -1 || backIndex == -1 || frontIndex == backIndex) return;
+
+    final frontCard = cards[frontIndex];
+    final backCard = cards[backIndex];
+
+    // Back card's front side becomes the back side of front card
+    final effectiveBackBytes = backCard.frontBytes ?? backCard.backBytes;
+    final effectiveBackCrop = backCard.frontCrop;
+    final effectiveBackRaw = backCard.rawBytes;
+    final effectiveBackPages = backCard.renderedPages;
+    final effectiveBackIsPdf = backCard.isPdf;
+
+    final mergedCard = frontCard.copyWith(
+      backBytes: effectiveBackBytes,
+      backCrop: effectiveBackCrop,
+      backEnhancement: backCard.frontEnhancement,
+      hasBothSides: true,
+      backRawBytes: effectiveBackRaw,
+      backIsPdf: effectiveBackIsPdf,
+      backRenderedPages: effectiveBackPages,
+      backSelectedPageIndex: backCard.selectedPageIndex,
+    );
+
+    cards[frontIndex] = mergedCard;
+    cards.removeAt(backIndex);
+
+    state = state.copyWith(
+      cards: cards,
+      activeCardId: frontCard.id,
+      processedFrontBytes: mergedCard.frontBytes,
+      processedBackBytes: mergedCard.backBytes,
+      frontCrop: mergedCard.frontCrop,
+      backCrop: mergedCard.backCrop,
+      hasBothSides: true,
+    );
+
+    _recalculateLayout();
+    saveDraft();
+  }
+
+  /// Uploads or selects a separate file (image or PDF) specifically for the BACK side of the active card.
+  Future<void> uploadCustomBackFile({
+    required Uint8List bytes,
+    required String fileName,
+    required bool isPdf,
+  }) async {
+    _pushUndo();
+    state = state.copyWith(isProcessing: true, clearError: true);
+    try {
+      List<Uint8List> pages = [];
+      if (isPdf) {
+        pages = await PdfRasterizer.rasterizeAllPages(pdfBytes: bytes, dpi: 300);
+      } else {
+        pages = [bytes];
+      }
+
+      if (pages.isEmpty) {
+        state = state.copyWith(
+          isProcessing: false,
+          errorMessage: 'Unable to render back document pages.',
+        );
+        return;
+      }
+
+      final workingImage = pages.first;
+
+      // By default no auto detect: use full standard crop
+      const backCrop = CropRectData();
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: workingImage,
+        cropData: backCrop,
+        enhancement: state.backEnhancement,
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      _updateActiveCardInList((c) => c.copyWith(
+        backRawBytes: bytes,
+        backIsPdf: isPdf,
+        backRenderedPages: pages,
+        backSelectedPageIndex: 0,
+        backCrop: backCrop,
+        backBytes: backBytes,
+        hasBothSides: true,
+      ));
+
+      state = state.copyWith(
+        backCrop: backCrop,
+        processedBackBytes: backBytes,
+        hasBothSides: true,
+        isProcessing: false,
+      );
+
+      _recalculateLayout();
+      saveDraft();
+    } catch (e) {
+      debugPrint('Error uploading custom back file: $e');
+      state = state.copyWith(
+        isProcessing: false,
+        errorMessage: 'Failed to process back card file: $e',
+      );
+    }
+  }
+
+  /// Uploads or selects a separate file specifically for the FRONT side of the active card.
+  Future<void> uploadCustomFrontFile({
+    required Uint8List bytes,
+    required String fileName,
+    required bool isPdf,
+  }) async {
+    _pushUndo();
+    state = state.copyWith(isProcessing: true, clearError: true);
+    try {
+      List<Uint8List> pages = [];
+      if (isPdf) {
+        pages = await PdfRasterizer.rasterizeAllPages(pdfBytes: bytes, dpi: 300);
+      } else {
+        pages = [bytes];
+      }
+
+      if (pages.isEmpty) {
+        state = state.copyWith(
+          isProcessing: false,
+          errorMessage: 'Unable to render front document pages.',
+        );
+        return;
+      }
+
+      final workingImage = pages.first;
+
+      // By default no auto detect: use full standard crop
+      const frontCrop = CropRectData();
+      final frontBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: workingImage,
+        cropData: frontCrop,
+        enhancement: state.frontEnhancement,
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      _updateActiveCardInList((c) => c.copyWith(
+        rawBytes: bytes,
+        isPdf: isPdf,
+        renderedPages: pages,
+        selectedPageIndex: 0,
+        frontCrop: frontCrop,
+        frontBytes: frontBytes,
+      ));
+
+      state = state.copyWith(
+        frontCrop: frontCrop,
+        processedFrontBytes: frontBytes,
+        isProcessing: false,
+      );
+
+      _recalculateLayout();
+      saveDraft();
+    } catch (e) {
+      debugPrint('Error uploading custom front file: $e');
+      state = state.copyWith(
+        isProcessing: false,
+        errorMessage: 'Failed to process front card file: $e',
+      );
+    }
+  }
+
+  /// Sets which page from a multi-page document is used as the BACK side.
+  Future<void> setBackSelectedPageIndex(int index) async {
+    final active = state.activeCard;
+    if (active == null) return;
+
+    final pages = active.backRenderedPages.isNotEmpty ? active.backRenderedPages : active.renderedPages;
+    if (index < 0 || index >= pages.length) return;
+
+    _pushUndo();
+    state = state.copyWith(isProcessing: true);
+
+    try {
+      final backSource = pages[index];
+      const backCrop = CropRectData();
+      final backBytes = await ImageProcessor.processCardAsync(
+        sourceBytes: backSource,
+        cropData: backCrop,
+        enhancement: state.backEnhancement,
+        targetWidthMm: state.idCardPreset.widthMm,
+        targetHeightMm: state.idCardPreset.heightMm,
+      );
+
+      _updateActiveCardInList((c) => c.copyWith(
+        backSelectedPageIndex: index,
+        backCrop: backCrop,
+        backBytes: backBytes,
+        hasBothSides: true,
+      ));
+
+      state = state.copyWith(
+        backCrop: backCrop,
+        processedBackBytes: backBytes,
+        hasBothSides: true,
+        isProcessing: false,
+      );
+
+      _recalculateLayout();
+      saveDraft();
+    } catch (e) {
+      debugPrint('Error setting back page index: $e');
+      state = state.copyWith(isProcessing: false);
+    }
   }
 
   /// Updates margin around cards in mm
@@ -849,6 +1761,10 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       contrast: contrast,
       sharpness: sharpness,
     );
+    _updateActiveCardInList((c) => c.copyWith(
+      frontEnhancement: newFront,
+      backEnhancement: newBack,
+    ));
     state = state.copyWith(
       frontEnhancement: newFront,
       backEnhancement: newBack,
@@ -859,6 +1775,10 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   /// Resets all image enhancements back to 0%
   Future<void> resetEnhancements() async {
     _pushUndo();
+    _updateActiveCardInList((c) => c.copyWith(
+      frontEnhancement: const EnhancementConfig(),
+      backEnhancement: const EnhancementConfig(),
+    ));
     state = state.copyWith(
       frontEnhancement: const EnhancementConfig(),
       backEnhancement: const EnhancementConfig(),
@@ -869,6 +1789,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   /// Updates front enhancement
   Future<void> updateFrontEnhancement(EnhancementConfig config) async {
     _pushUndo();
+    _updateActiveCardInList((c) => c.copyWith(frontEnhancement: config));
     state = state.copyWith(frontEnhancement: config);
     await _reprocess();
   }
@@ -876,6 +1797,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   /// Updates back enhancement
   Future<void> updateBackEnhancement(EnhancementConfig config) async {
     _pushUndo();
+    _updateActiveCardInList((c) => c.copyWith(backEnhancement: config));
     state = state.copyWith(backEnhancement: config);
     await _reprocess();
   }
@@ -886,8 +1808,10 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     state = state.copyWith(isProcessing: true, clearError: true);
 
     try {
+      final active = state.activeCard;
+      final frontSource = active?.frontSourceImageBytes ?? activeBytes;
       final frontBytes = await ImageProcessor.processCardAsync(
-        sourceBytes: activeBytes,
+        sourceBytes: frontSource,
         cropData: state.frontCrop,
         enhancement: state.frontEnhancement,
         targetWidthMm: state.idCardPreset.widthMm,
@@ -896,8 +1820,9 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
 
       Uint8List? backBytes;
       if (state.hasBothSides && state.backCrop != null) {
+        final backSource = active?.backSourceImageBytes ?? activeBytes;
         backBytes = await ImageProcessor.processCardAsync(
-          sourceBytes: activeBytes,
+          sourceBytes: backSource,
           cropData: state.backCrop!,
           enhancement: state.backEnhancement,
           targetWidthMm: state.idCardPreset.widthMm,
@@ -905,71 +1830,27 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         );
       }
 
-      PrintLayout layout;
-      PrintLayout? backLayout;
-
-      if (state.workflowType == IdCardWorkflowType.epsonL805) {
-        final front1 = frontBytes;
-        final back1 = state.hasBothSides ? backBytes : null;
-        final front2 = state.card2FrontBytes ?? front1;
-        final back2 = state.hasBothSides ? (state.card2BackBytes ?? back1) : null;
-
-        final frontLayout = LayoutEngine.calculateL805A4TrayLayout(
-          slot1ImageBytes: state.swapFrontBack ? (back1 ?? front1) : front1,
-          slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? (back2 ?? front2) : front2) : null,
-          isFrontPage: !state.swapFrontBack,
-          calibration: state.l805Calibration,
-        );
-
-        if (state.hasBothSides && back1 != null) {
-          backLayout = LayoutEngine.calculateL805A4TrayLayout(
-            slot1ImageBytes: state.swapFrontBack ? front1 : back1,
-            slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? front2 : (back2 ?? front2)) : null,
-            isFrontPage: state.swapFrontBack,
-            calibration: state.l805Calibration,
-          );
-        }
-
-        layout = (state.l805PreviewFront || backLayout == null) ? frontLayout : backLayout;
-      } else if (state.workflowType == IdCardWorkflowType.dragonSheet) {
-        final cardList = <Uint8List>[];
-        if (state.dragonCards.isNotEmpty) {
-          cardList.addAll(state.dragonCards);
-        } else {
-          for (int i = 0; i < 10; i++) {
-            if (state.pvcMode == PvcOutputMode.dragonSheetDuplex) {
-              cardList.add((i % 2 == 0) ? frontBytes : (backBytes ?? frontBytes));
-            } else {
-              cardList.add(frontBytes);
-            }
-          }
-        }
-        layout = LayoutEngine.calculateDragonSheetLayout(
-          cardImages: cardList,
-          isDuplex: state.pvcMode == PvcOutputMode.dragonSheetDuplex,
-          marginMm: state.marginMm,
-          spacingMm: state.gapMm,
-        );
-      } else {
-        layout = LayoutEngine.calculateIdCardLayout(
-          paperPreset: state.paperPreset,
-          idPreset: state.idCardPreset,
-          frontImageBytes: frontBytes,
-          backImageBytes: backBytes,
-          swapFrontBack: state.swapFrontBack,
-          gapMm: state.gapMm,
-          marginMm: state.marginMm,
-          orientation: state.orientation,
-        );
-      }
+      _updateActiveCardInList((c) => c.copyWith(
+        frontBytes: frontBytes,
+        backBytes: backBytes,
+        clearBackBytes: !state.hasBothSides || backBytes == null,
+        frontCrop: state.frontCrop,
+        backCrop: state.backCrop,
+        clearBackCrop: state.backCrop == null,
+        hasBothSides: state.hasBothSides,
+        swapFrontBack: state.swapFrontBack,
+        frontEnhancement: state.frontEnhancement,
+        backEnhancement: state.backEnhancement,
+      ));
 
       state = state.copyWith(
         processedFrontBytes: frontBytes,
         processedBackBytes: backBytes,
-        currentLayout: layout,
-        l805BackLayout: backLayout,
+        clearProcessedBackBytes: !state.hasBothSides || backBytes == null,
         isProcessing: false,
       );
+
+      _recalculateLayout();
       saveDraft();
     } catch (e) {
       debugPrint('Error reprocessing ID Card: $e');
@@ -981,70 +1862,80 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   }
 
   void _recalculateLayout() {
-    if (state.processedFrontBytes == null) return;
+    List<IdCardEntry> cardList = List.from(state.cards);
 
-    PrintLayout layout;
+    if (cardList.isEmpty && state.processedFrontBytes != null) {
+      cardList = [
+        IdCardEntry(
+          id: 'card_legacy',
+          name: state.fileName ?? 'ID Card',
+          rawBytes: state.rawSourceBytes,
+          isPdf: state.isPdfSource,
+          renderedPages: state.renderedPages,
+          selectedPageIndex: state.selectedPageIndex,
+          frontCrop: state.frontCrop,
+          backCrop: state.backCrop,
+          hasBothSides: state.hasBothSides,
+          swapFrontBack: state.swapFrontBack,
+          frontEnhancement: state.frontEnhancement,
+          backEnhancement: state.backEnhancement,
+          frontBytes: state.processedFrontBytes,
+          backBytes: state.processedBackBytes,
+        ),
+      ];
+    }
+
+    if (cardList.isEmpty || cardList.every((c) => c.frontBytes == null)) {
+      state = state.copyWith(currentLayouts: const []);
+      return;
+    }
+
+    List<PrintLayout> layouts;
     PrintLayout? backLayout;
 
     if (state.workflowType == IdCardWorkflowType.epsonL805) {
-      final front1 = state.processedFrontBytes!;
-      final back1 = state.hasBothSides ? state.processedBackBytes : null;
-      final front2 = state.card2FrontBytes ?? front1;
-      final back2 = state.hasBothSides ? (state.card2BackBytes ?? back1) : null;
-
-      final frontLayout = LayoutEngine.calculateL805A4TrayLayout(
-        slot1ImageBytes: state.swapFrontBack ? (back1 ?? front1) : front1,
-        slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? (back2 ?? front2) : front2) : null,
-        isFrontPage: !state.swapFrontBack,
+      layouts = LayoutEngine.calculateMultiL805TrayLayoutPages(
+        cards: cardList,
+        cardsPerTray: 2,
         calibration: state.l805Calibration,
       );
-
-      if (state.hasBothSides && back1 != null) {
-        backLayout = LayoutEngine.calculateL805A4TrayLayout(
-          slot1ImageBytes: state.swapFrontBack ? front1 : back1,
-          slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? front2 : (back2 ?? front2)) : null,
-          isFrontPage: state.swapFrontBack,
-          calibration: state.l805Calibration,
-        );
+      if (layouts.length > 1) {
+        backLayout = layouts[1];
       }
-
-      layout = (state.l805PreviewFront || backLayout == null) ? frontLayout : backLayout;
     } else if (state.workflowType == IdCardWorkflowType.dragonSheet) {
-      final cardList = <Uint8List>[];
-      if (state.dragonCards.isNotEmpty) {
-        cardList.addAll(state.dragonCards);
-      } else {
-        for (int i = 0; i < 10; i++) {
-          if (state.pvcMode == PvcOutputMode.dragonSheetDuplex) {
-            cardList.add((i % 2 == 0)
-                ? state.processedFrontBytes!
-                : (state.processedBackBytes ?? state.processedFrontBytes!));
-          } else {
-            cardList.add(state.processedFrontBytes!);
-          }
-        }
-      }
-      layout = LayoutEngine.calculateDragonSheetLayout(
-        cardImages: cardList,
-        isDuplex: state.pvcMode == PvcOutputMode.dragonSheetDuplex,
+      final autoDuplex = cardList.any((c) => c.hasBothSides && c.backBytes != null);
+      layouts = LayoutEngine.calculateMultiDragonSheetLayoutPages(
+        cards: cardList,
+        isDuplex: autoDuplex,
         marginMm: state.marginMm,
         spacingMm: state.gapMm,
+        showDragonCutLines: state.showDragonCutLines,
       );
     } else {
-      layout = LayoutEngine.calculateIdCardLayout(
+      layouts = LayoutEngine.calculateMultiIdCardLayoutPages(
         paperPreset: state.paperPreset,
         idPreset: state.idCardPreset,
-        frontImageBytes: state.processedFrontBytes!,
-        backImageBytes: state.hasBothSides ? state.processedBackBytes : null,
-        swapFrontBack: state.swapFrontBack,
-        gapMm: state.gapMm,
-        marginMm: state.marginMm,
+        cards: cardList,
         orientation: state.orientation,
+        marginMm: state.marginMm,
+        gapMm: state.gapMm,
+        showDragonCutLines: state.showDragonCutLines,
       );
     }
 
+    int validIndex = state.activeSheetIndex;
+    if (layouts.isNotEmpty) {
+      validIndex = validIndex.clamp(0, layouts.length - 1);
+    } else {
+      validIndex = 0;
+    }
+
+    final activeLayout = layouts.isNotEmpty ? layouts[validIndex] : null;
+
     state = state.copyWith(
-      currentLayout: layout,
+      currentLayouts: layouts,
+      activeSheetIndex: validIndex,
+      currentLayout: activeLayout,
       l805BackLayout: backLayout,
     );
     saveDraft();
@@ -1053,20 +1944,29 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   void setWorkflowType(IdCardWorkflowType type) {
     PaperPreset newPaper;
     PaperOrientation newOrientation = state.orientation;
+    double newGapMm = state.gapMm;
+    double newMarginMm = state.marginMm;
 
     if (type == IdCardWorkflowType.photoPaperLamination) {
       newPaper = StandardPaperPresets.fourR;
+      newGapMm = 0.5;
+      newMarginMm = 4.0;
     } else if (type == IdCardWorkflowType.epsonL805) {
       newPaper = StandardPaperPresets.a4;
       newOrientation = PaperOrientation.portrait;
     } else {
       newPaper = StandardPaperPresets.dragonSheet200x300;
+      newGapMm = 0.5;
+      newMarginMm = 2.0;
     }
 
     state = state.copyWith(
       workflowType: type,
       paperPreset: newPaper,
       orientation: newOrientation,
+      gapMm: newGapMm,
+      marginMm: newMarginMm,
+      activeSheetIndex: 0,
     );
     _recalculateLayout();
   }
@@ -1091,7 +1991,11 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
 
   void setL805PreviewFront(bool isFront) {
     state = state.copyWith(l805PreviewFront: isFront);
-    _recalculateLayout();
+    if (state.currentLayouts.length > 1) {
+      setActiveSheetIndex(isFront ? 0 : 1);
+    } else {
+      _recalculateLayout();
+    }
   }
 
   Future<void> updateL805Calibration(L805Calibration cal) async {
@@ -1156,6 +2060,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     state = state.copyWith(
       undoStack: newUndo,
       redoStack: [...state.redoStack, currentSnapshot],
+      cards: last.cards,
+      activeCardId: last.activeCardId,
       frontCrop: last.frontCrop,
       backCrop: last.backCrop,
       hasBothSides: last.hasBothSides,
@@ -1180,6 +2086,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     final newRedo = List<IdCardStateSnapshot>.from(state.redoStack)..removeLast();
 
     final currentSnapshot = IdCardStateSnapshot(
+      cards: List.from(state.cards),
+      activeCardId: state.activeCardId,
       frontCrop: state.frontCrop,
       backCrop: state.backCrop,
       hasBothSides: state.hasBothSides,
@@ -1199,6 +2107,8 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
     state = state.copyWith(
       undoStack: newUndo,
       redoStack: newRedo,
+      cards: next.cards,
+      activeCardId: next.activeCardId,
       frontCrop: next.frontCrop,
       backCrop: next.backCrop,
       hasBothSides: next.hasBothSides,
@@ -1218,81 +2128,41 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   }
 
   Future<bool> printDocument({Printer? targetPrinter}) async {
-    if (state.workflowType == IdCardWorkflowType.epsonL805) {
-      if (state.processedFrontBytes == null) return false;
-
-      final front1 = state.processedFrontBytes!;
-      final back1 = state.hasBothSides ? state.processedBackBytes : null;
-      final front2 = state.card2FrontBytes ?? front1;
-      final back2 = state.hasBothSides ? (state.card2BackBytes ?? back1) : null;
-
-      final frontLayout = LayoutEngine.calculateL805A4TrayLayout(
-        slot1ImageBytes: state.swapFrontBack ? (back1 ?? front1) : front1,
-        slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? (back2 ?? front2) : front2) : null,
-        isFrontPage: !state.swapFrontBack,
-        calibration: state.l805Calibration,
-      );
-
-      final layouts = <PrintLayout>[frontLayout];
-      if (state.hasBothSides && back1 != null) {
-        final backLayout = LayoutEngine.calculateL805A4TrayLayout(
-          slot1ImageBytes: state.swapFrontBack ? front1 : back1,
-          slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? front2 : (back2 ?? front2)) : null,
-          isFrontPage: state.swapFrontBack,
-          calibration: state.l805Calibration,
-        );
-        layouts.add(backLayout);
-      }
-
-      final printerService = _ref.read(printerServiceProvider);
-      final success = await printerService.printMultiLayout(
-        layouts,
-        printer: targetPrinter,
-        jobName: '${state.idCardPreset.name} (Epson L805 PVC Tray - ${layouts.length} A4 Pages)',
-      );
-
-      await _ref.read(historyProvider.notifier).addRecord(
-            PrintHistoryItem(
-              id: _uuid.v4(),
-              timestamp: DateTime.now(),
-              serviceName: 'Epson L805 Card Print',
-              paperName: 'A4 (${layouts.length} Pages)',
-              copiesCount: state.l805CardQuantity * state.printJobCopies,
-              printerName: targetPrinter?.name ?? 'System Print Dialog',
-              status: success ? 'Printed' : 'Print Submitted',
-              dimensionsSummary: '${state.idCardPreset.formattedDimensions} (${state.l805CardQuantity} card${state.l805CardQuantity > 1 ? 's' : ''}, ${layouts.length} A4 pgs)',
-              sellingPrice: state.calculatedSellingPrice,
-              materialCost: state.calculatedMaterialCost,
-              inkCost: state.calculatedInkCost,
-              profit: state.calculatedEstimatedProfit,
-              paymentStatus: 'Paid',
-              paymentMethod: 'UPI',
-            ),
-          );
-
-      return success;
-    }
-
-    final layout = state.currentLayout;
-    if (layout == null || layout.items.isEmpty) return false;
+    final layouts = state.currentLayouts.isNotEmpty
+        ? state.currentLayouts
+        : (state.currentLayout != null ? [state.currentLayout!] : <PrintLayout>[]);
+    if (layouts.isEmpty) return false;
 
     final printerService = _ref.read(printerServiceProvider);
-    final success = await printerService.printLayout(
-      layout,
-      printer: targetPrinter,
-      jobName: '${state.idCardPreset.name} (4R Print)',
-    );
+    final totalPages = layouts.length;
 
+    final success = totalPages > 1
+        ? await printerService.printMultiLayout(
+            layouts,
+            printer: targetPrinter,
+            jobName: '${state.idCardPreset.name} ($totalPages Pages)',
+          )
+        : await printerService.printLayout(
+            layouts.first,
+            printer: targetPrinter,
+            jobName: '${state.idCardPreset.name} (Print)',
+          );
+
+    final totalCards = state.totalCardsCount;
     await _ref.read(historyProvider.notifier).addRecord(
           PrintHistoryItem(
             id: _uuid.v4(),
             timestamp: DateTime.now(),
-            serviceName: state.idCardPreset.name,
-            paperName: layout.paperPreset.name,
-            copiesCount: layout.itemCount * state.printJobCopies,
+            serviceName: state.workflowType == IdCardWorkflowType.epsonL805
+                ? 'Epson L805 Card Print'
+                : (state.workflowType == IdCardWorkflowType.dragonSheet
+                    ? 'Dragon Sheet PVC Print'
+                    : state.idCardPreset.name),
+            paperName: '${state.paperPreset.name} ($totalPages Page${totalPages > 1 ? 's' : ''})',
+            copiesCount: totalCards * state.printJobCopies,
             printerName: targetPrinter?.name ?? 'System Print Dialog',
             status: success ? 'Printed' : 'Print Submitted',
-            dimensionsSummary: '${state.idCardPreset.formattedDimensions} (${layout.itemCount} cards)',
+            dimensionsSummary: '${state.idCardPreset.formattedDimensions} ($totalCards cards, $totalPages pgs)',
             sellingPrice: state.calculatedSellingPrice,
             materialCost: state.calculatedMaterialCost,
             inkCost: state.calculatedInkCost,
@@ -1306,52 +2176,23 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
   }
 
   Future<bool> exportPdf() async {
-    if (state.workflowType == IdCardWorkflowType.epsonL805) {
-      if (state.processedFrontBytes == null) return false;
-
-      final front1 = state.processedFrontBytes!;
-      final back1 = state.hasBothSides ? state.processedBackBytes : null;
-      final front2 = state.card2FrontBytes ?? front1;
-      final back2 = state.hasBothSides ? (state.card2BackBytes ?? back1) : null;
-
-      final frontLayout = LayoutEngine.calculateL805A4TrayLayout(
-        slot1ImageBytes: state.swapFrontBack ? (back1 ?? front1) : front1,
-        slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? (back2 ?? front2) : front2) : null,
-        isFrontPage: !state.swapFrontBack,
-        calibration: state.l805Calibration,
-      );
-
-      final layouts = <PrintLayout>[frontLayout];
-      if (state.hasBothSides && back1 != null) {
-        final backLayout = LayoutEngine.calculateL805A4TrayLayout(
-          slot1ImageBytes: state.swapFrontBack ? front1 : back1,
-          slot2ImageBytes: state.l805CardQuantity == 2 ? (state.swapFrontBack ? front2 : (back2 ?? front2)) : null,
-          isFrontPage: state.swapFrontBack,
-          calibration: state.l805Calibration,
-        );
-        layouts.add(backLayout);
-      }
-
-      final printerService = _ref.read(printerServiceProvider);
-      final fileName = '${state.idCardPreset.name.replaceAll(' ', '_')}_Epson_L805_A4_PVC';
-      final success = await printerService.exportMultiLayoutPdf(
-        layouts,
-        fileName,
-      );
-
-      return success;
-    }
-
-    final layout = state.currentLayout;
-    if (layout == null || layout.items.isEmpty) return false;
+    final layouts = state.currentLayouts.isNotEmpty
+        ? state.currentLayouts
+        : (state.currentLayout != null ? [state.currentLayout!] : <PrintLayout>[]);
+    if (layouts.isEmpty) return false;
 
     final printerService = _ref.read(printerServiceProvider);
-    final fileName = '${state.idCardPreset.name.replaceAll(' ', '_')}_4R_Print';
+    final fileName = '${state.idCardPreset.name.replaceAll(' ', '_')}_${state.workflowType.name}';
 
-    final success = await printerService.exportPdf(
-      layout,
-      fileName,
-    );
+    final success = layouts.length > 1
+        ? await printerService.exportMultiLayoutPdf(
+            layouts,
+            fileName,
+          )
+        : await printerService.exportPdf(
+            layouts.first,
+            fileName,
+          );
 
     return success;
   }

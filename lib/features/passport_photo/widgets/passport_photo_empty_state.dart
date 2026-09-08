@@ -427,14 +427,19 @@ class _RecentProjectCardState extends State<_RecentProjectCard> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          '${item.paperName} • ${item.orientation}',
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w500,
-                            color: palette.textSecondary,
+                        Expanded(
+                          child: Text(
+                            '${item.paperName} • ${item.orientation}',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w500,
+                              color: palette.textSecondary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        const SizedBox(width: 6),
                         Text(
                           widget.formattedDate,
                           style: TextStyle(

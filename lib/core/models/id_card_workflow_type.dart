@@ -1,5 +1,5 @@
 enum IdCardWorkflowType {
-  photoPaperLamination('Photo Paper / 4R', 50.0),
+  photoPaperLamination('Lamination Card', 50.0),
   epsonL805('Epson L805 Card', 100.0),
   dragonSheet('Dragon Sheet (200×300mm)', 100.0);
 
