@@ -655,6 +655,13 @@ class _DashedCutLinePainter extends CustomPainter {
       return;
     }
 
+    final isXerox = layout.serviceType.toLowerCase().contains('xerox');
+
+    if (isXerox) {
+      // Xerox has no cut lines or borders
+      return;
+    }
+
     final isDragon = (layout.paperPreset.id == 'dragon_sheet_200x300' ||
         layout.serviceType.toLowerCase().contains('dragon'));
 

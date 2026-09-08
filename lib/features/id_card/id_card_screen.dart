@@ -181,18 +181,51 @@ class _IdCardScreenState extends ConsumerState<IdCardScreen> {
     }
   }
 
+  Future<void> _saveProject(IdCardNotifier notifier) async {
+    final savedPath = await notifier.saveProjectAsFps();
+    if (savedPath != null && mounted && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ID Card project saved as .fps successfully.'),
+          backgroundColor: Color(0xFF16A34A),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   void _handleKeyEvent(KeyEvent event, IdCardState state, IdCardNotifier notifier) {
     if (event is KeyDownEvent) {
-      final isCtrl = HardwareKeyboard.instance.isControlPressed;
+      final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
       final isShift = HardwareKeyboard.instance.isShiftPressed;
 
       if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyP) {
+        // Ctrl + P : Print
         if (state.hasSource) {
           notifier.printDocument();
         }
-      } else if (isCtrl && isShift && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyS) {
+        // Ctrl + S : Save Project (.fps)
+        if (state.hasSource) {
+          _saveProject(notifier);
+        }
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyE) {
+        // Ctrl + E : Export PDF
+        if (state.hasSource) {
+          notifier.exportPdf();
+        }
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyO) {
+        // Ctrl + O : Open File
+        _pickFile(onlyPdf: false, onlyImages: false, isAddMore: false);
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyN) {
+        // Ctrl + N : Add File / Add Card
+        _pickFile(onlyPdf: false, onlyImages: false, isAddMore: true);
+      } else if (isCtrl && (event.logicalKey == LogicalKeyboardKey.keyY || (isShift && event.logicalKey == LogicalKeyboardKey.keyZ))) {
+        // Ctrl + Y or Ctrl + Shift + Z : Redo
         if (state.canRedo) notifier.redo();
       } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
+        // Ctrl + Z : Undo
         if (state.canUndo) notifier.undo();
       }
     }
@@ -222,11 +255,63 @@ class _IdCardScreenState extends ConsumerState<IdCardScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final palette = IdCardPalette.of(context, isDark: isDark);
 
-    return KeyboardListener(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: (event) => _handleKeyEvent(event, state, notifier),
-      child: Scaffold(
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.keyP, control: true): () {
+          if (state.hasSource) notifier.printDocument();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
+          if (state.hasSource) _saveProject(notifier);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyE, control: true): () {
+          if (state.hasSource) notifier.exportPdf();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyO, control: true): () {
+          _pickFile(onlyPdf: false, onlyImages: false, isAddMore: false);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true): () {
+          _pickFile(onlyPdf: false, onlyImages: false, isAddMore: true);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () {
+          if (state.canUndo) notifier.undo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyY, control: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+        // Meta (Command key) support on macOS
+        const SingleActivator(LogicalKeyboardKey.keyP, meta: true): () {
+          if (state.hasSource) notifier.printDocument();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () {
+          if (state.hasSource) _saveProject(notifier);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyE, meta: true): () {
+          if (state.hasSource) notifier.exportPdf();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyO, meta: true): () {
+          _pickFile(onlyPdf: false, onlyImages: false, isAddMore: false);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () {
+          _pickFile(onlyPdf: false, onlyImages: false, isAddMore: true);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () {
+          if (state.canUndo) notifier.undo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyY, meta: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+      },
+      child: KeyboardListener(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: (event) => _handleKeyEvent(event, state, notifier),
+        child: Scaffold(
         backgroundColor: palette.bg,
         body: DropTarget(
           onDragEntered: (_) => setState(() => _isDraggingOver = true),
@@ -281,19 +366,7 @@ class _IdCardScreenState extends ConsumerState<IdCardScreen> {
                   onRedo: notifier.redo,
                   onNewDocument: () => notifier.clearAll(),
                   onOpen: () => _pickFile(onlyPdf: false, onlyImages: false),
-                  onSaveProject: () async {
-                    final savedPath = await notifier.saveProjectAsFps();
-                    if (savedPath != null && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('ID Card project saved as .fps successfully.'),
-                          backgroundColor: Color(0xFF16A34A),
-                          behavior: SnackBarBehavior.floating,
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    }
-                  },
+                  onSaveProject: () => _saveProject(notifier),
                   onCloseProject: () => notifier.closeCurrentProject(),
                   onExportPdf: () => notifier.exportPdf(),
                   onPrint: () => notifier.printDocument(),
@@ -781,6 +854,7 @@ class _IdCardScreenState extends ConsumerState<IdCardScreen> {
         ),
       ),
     ),
-  );
+  ),
+);
 }
 }

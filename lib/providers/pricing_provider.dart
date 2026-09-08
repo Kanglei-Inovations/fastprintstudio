@@ -38,6 +38,9 @@ class PricingNotifier extends StateNotifier<List<PricingItem>> {
   /// Looks up price and cost for a given service name from print history
   PricingItem getPriceForService(String serviceName) {
     final s = serviceName.toLowerCase();
+    if (s.contains('xerox') && (s.contains('card') || s.contains('id') || s.contains('aadhaar'))) {
+      return state.firstWhere((p) => p.id == 'id_card_xerox', orElse: () => state[2]);
+    }
     if (s.contains('pvc')) {
       return state.firstWhere((p) => p.id == 'aadhaar_pvc', orElse: () => state[1]);
     }

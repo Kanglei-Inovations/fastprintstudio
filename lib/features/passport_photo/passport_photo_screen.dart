@@ -203,18 +203,59 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
     }
   }
 
+  Future<void> _saveProject(PassportPhotoNotifier notifier) async {
+    final savedPath = await notifier.saveProjectAsFps();
+    if (savedPath != null && mounted && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Saved project: ${p.basename(savedPath)}'),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF16A34A),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   void _handleKeyEvent(KeyEvent event, PassportPhotoState state, PassportPhotoNotifier notifier) {
     if (event is KeyDownEvent) {
-      final isCtrl = HardwareKeyboard.instance.isControlPressed;
+      final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
       final isShift = HardwareKeyboard.instance.isShiftPressed;
 
       if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyP) {
+        // Ctrl + P : Print
         if (state.hasImage) {
           notifier.printDocument();
         }
-      } else if (isCtrl && isShift && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyS) {
+        // Ctrl + S : Save Project (.fps)
+        if (state.hasImage) {
+          _saveProject(notifier);
+        }
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyE) {
+        // Ctrl + E : Export PDF
+        if (state.hasImage) {
+          notifier.exportPdf();
+        }
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyO) {
+        // Ctrl + O : Open Photo File
+        _pickNewPhoto();
+      } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyN) {
+        // Ctrl + N : Add File / Add Photo
+        _pickAdditionalPersonPhoto();
+      } else if (isCtrl && (event.logicalKey == LogicalKeyboardKey.keyY || (isShift && event.logicalKey == LogicalKeyboardKey.keyZ))) {
+        // Ctrl + Y or Ctrl + Shift + Z : Redo
         if (state.canRedo) notifier.redo();
       } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
+        // Ctrl + Z : Undo
         if (state.canUndo) notifier.undo();
       }
     }
@@ -265,11 +306,63 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
       }
     });
 
-    return KeyboardListener(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: (event) => _handleKeyEvent(event, state, notifier),
-      child: Scaffold(
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.keyP, control: true): () {
+          if (state.hasImage) notifier.printDocument();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
+          if (state.hasImage) _saveProject(notifier);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyE, control: true): () {
+          if (state.hasImage) notifier.exportPdf();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyO, control: true): () {
+          _pickNewPhoto();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true): () {
+          _pickAdditionalPersonPhoto();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () {
+          if (state.canUndo) notifier.undo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyY, control: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+        // Meta (Command key) support on macOS
+        const SingleActivator(LogicalKeyboardKey.keyP, meta: true): () {
+          if (state.hasImage) notifier.printDocument();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () {
+          if (state.hasImage) _saveProject(notifier);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyE, meta: true): () {
+          if (state.hasImage) notifier.exportPdf();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyO, meta: true): () {
+          _pickNewPhoto();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () {
+          _pickAdditionalPersonPhoto();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): () {
+          if (state.canUndo) notifier.undo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyY, meta: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true): () {
+          if (state.canRedo) notifier.redo();
+        },
+      },
+      child: KeyboardListener(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: (event) => _handleKeyEvent(event, state, notifier),
+        child: Scaffold(
         backgroundColor: palette.bg,
         body: DropTarget(
           onDragEntered: (_) => setState(() => _isDraggingOver = true),
@@ -482,91 +575,78 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
                         const SizedBox(width: 6),
 
                         // 4. Open (Photo or .fps Project)
-                        OutlinedButton.icon(
-                          onPressed: () async {
-                            final file = await FilePicker.pickFile(
-                              dialogTitle: 'Open Photo or FastPrint Studio Project',
-                              type: FileType.custom,
-                              allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'fps'],
-                            );
-                            if (file != null) {
-                              final path = file.path;
-                              if (path != null && path.toLowerCase().endsWith('.fps')) {
-                                await notifier.loadProjectFromFps(filePath: path);
-                              } else {
-                                final bytes = await file.readAsBytes();
-                                if (mounted) {
-                                  await _handleNewPhotoSelected(bytes, file.name);
+                        Tooltip(
+                          message: 'Open Photo or Project (Ctrl+O)',
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final file = await FilePicker.pickFile(
+                                dialogTitle: 'Open Photo or FastPrint Studio Project',
+                                type: FileType.custom,
+                                allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'fps'],
+                              );
+                              if (file != null) {
+                                final path = file.path;
+                                if (path != null && path.toLowerCase().endsWith('.fps')) {
+                                  await notifier.loadProjectFromFps(filePath: path);
+                                } else {
+                                  final bytes = await file.readAsBytes();
+                                  if (mounted) {
+                                    await _handleNewPhotoSelected(bytes, file.name);
+                                  }
                                 }
                               }
-                            }
-                          },
-                          icon: Icon(Icons.folder_open_outlined, size: 15, color: palette.textPrimary),
-                          label: Text(
-                            'Open',
-                            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.textPrimary),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-                            side: BorderSide(color: palette.cardBorder),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                            backgroundColor: palette.cardBg,
+                            },
+                            icon: Icon(Icons.folder_open_outlined, size: 15, color: palette.textPrimary),
+                            label: Text(
+                              'Open',
+                              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.textPrimary),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                              side: BorderSide(color: palette.cardBorder),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                              backgroundColor: palette.cardBg,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 6),
 
                         // 5. Save (.fps Project)
-                        OutlinedButton.icon(
-                          onPressed: state.hasImage
-                              ? () async {
-                                  final savedPath = await notifier.saveProjectAsFps();
-                                  if (savedPath != null && context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Row(
-                                          children: [
-                                            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
-                                            const SizedBox(width: 8),
-                                            Expanded(
-                                              child: Text('Saved project: ${p.basename(savedPath)}'),
-                                            ),
-                                          ],
-                                        ),
-                                        backgroundColor: const Color(0xFF16A34A),
-                                        behavior: SnackBarBehavior.floating,
-                                        duration: const Duration(seconds: 3),
-                                      ),
-                                    );
-                                  }
-                                }
-                              : null,
-                          icon: Icon(Icons.save_outlined, size: 15, color: state.hasImage ? palette.textPrimary : palette.textMuted),
-                          label: Text(
-                            'Save .fps',
-                            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: state.hasImage ? palette.textPrimary : palette.textMuted),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-                            side: BorderSide(color: palette.cardBorder),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                            backgroundColor: palette.cardBg,
+                        Tooltip(
+                          message: 'Save Project (Ctrl+S)',
+                          child: OutlinedButton.icon(
+                            onPressed: state.hasImage ? () => _saveProject(notifier) : null,
+                            icon: Icon(Icons.save_outlined, size: 15, color: state.hasImage ? palette.textPrimary : palette.textMuted),
+                            label: Text(
+                              'Save .fps',
+                              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: state.hasImage ? palette.textPrimary : palette.textMuted),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                              side: BorderSide(color: palette.cardBorder),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                              backgroundColor: palette.cardBg,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 6),
 
                         // 6. Export PDF
-                        OutlinedButton.icon(
-                          onPressed: state.hasImage ? () => notifier.exportPdf() : null,
-                          icon: Icon(Icons.picture_as_pdf_outlined, size: 15, color: state.hasImage ? palette.textPrimary : palette.textMuted),
-                          label: Text(
-                            'Export PDF',
-                            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: state.hasImage ? palette.textPrimary : palette.textMuted),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-                            side: BorderSide(color: palette.cardBorder),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                            backgroundColor: palette.cardBg,
+                        Tooltip(
+                          message: 'Export PDF (Ctrl+E)',
+                          child: OutlinedButton.icon(
+                            onPressed: state.hasImage ? () => notifier.exportPdf() : null,
+                            icon: Icon(Icons.picture_as_pdf_outlined, size: 15, color: state.hasImage ? palette.textPrimary : palette.textMuted),
+                            label: Text(
+                              'Export PDF',
+                              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: state.hasImage ? palette.textPrimary : palette.textMuted),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                              side: BorderSide(color: palette.cardBorder),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                              backgroundColor: palette.cardBg,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -798,8 +878,9 @@ class _PassportPhotoScreenState extends ConsumerState<PassportPhotoScreen> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _LeftControlsSidebar extends StatelessWidget {
@@ -960,18 +1041,21 @@ class _LeftControlsSidebar extends StatelessWidget {
         // + Add Person / Photo Button (Available when in Passport / Pass+Stamp modes)
         if (state.presetMode != PhotoTypePresetMode.fourRPhoto &&
             state.presetMode != PhotoTypePresetMode.a4Photo) ...[
-          OutlinedButton.icon(
-            onPressed: onAddPersonPhoto,
-            icon: Icon(Icons.person_add_alt_1_rounded, size: 14, color: palette.blue),
-            label: Text(
-              '+ Add Person / Photo',
-              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.blue),
-            ),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 9),
-              side: BorderSide(color: palette.blue.withValues(alpha: 0.4)),
-              backgroundColor: palette.blueLight,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+          Tooltip(
+            message: 'Add Person / Photo (Ctrl+N)',
+            child: OutlinedButton.icon(
+              onPressed: onAddPersonPhoto,
+              icon: Icon(Icons.person_add_alt_1_rounded, size: 14, color: palette.blue),
+              label: Text(
+                '+ Add Person / Photo',
+                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.blue),
+              ),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                side: BorderSide(color: palette.blue.withValues(alpha: 0.4)),
+                backgroundColor: palette.blueLight,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
             ),
           ),
           const SizedBox(height: 8),

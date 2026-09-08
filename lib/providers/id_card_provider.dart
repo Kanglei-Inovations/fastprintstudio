@@ -43,6 +43,7 @@ class IdCardStateSnapshot {
   final PvcOutputMode pvcMode;
   final int l805CardQuantity;
   final bool l805PreviewFront;
+  final bool isBlackAndWhite;
 
   IdCardStateSnapshot({
     this.cards = const [],
@@ -60,6 +61,7 @@ class IdCardStateSnapshot {
     this.pvcMode = PvcOutputMode.l805Tray,
     this.l805CardQuantity = 1,
     this.l805PreviewFront = true,
+    this.isBlackAndWhite = false,
   });
 }
 
@@ -117,6 +119,7 @@ class IdCardState {
   final Uint8List? card2BackBytes; // optional 2nd card back
   final L805Calibration l805Calibration;
   final PrintLayout? l805BackLayout;
+  final bool isBlackAndWhite;
 
   const IdCardState({
     this.cards = const [],
@@ -165,12 +168,14 @@ class IdCardState {
     this.card2BackBytes,
     this.l805Calibration = L805Calibration.factoryDefault,
     this.l805BackLayout,
+    this.isBlackAndWhite = false,
   });
 
   bool get hasSource =>
       cards.isNotEmpty || (rawSourceBytes != null && rawSourceBytes!.isNotEmpty);
   bool get canUndo => undoStack.isNotEmpty;
   bool get canRedo => redoStack.isNotEmpty;
+  bool get isColor => !isBlackAndWhite;
 
   IdCardEntry? get activeCard =>
       cards.where((c) => c.id == activeCardId).firstOrNull ?? cards.firstOrNull;
@@ -180,7 +185,12 @@ class IdCardState {
 
   int get totalFilesCount => cards.isNotEmpty ? cards.length : (hasSource ? 1 : 0);
 
-  double get unitSellingPrice => workflowType.defaultPricePerCard;
+  double get unitSellingPrice {
+    if (workflowType == IdCardWorkflowType.xerox) {
+      return isBlackAndWhite ? 5.0 : 10.0;
+    }
+    return workflowType.defaultPricePerCard;
+  }
 
   int get totalCardsCount {
     if (cards.isNotEmpty) return cards.length;
@@ -193,6 +203,9 @@ class IdCardState {
     if (workflowType == IdCardWorkflowType.photoPaperLamination) {
       // 4R Photo Paper (₹4) + 4R Lamination Pouch (₹2.5) = ₹6.5 per sheet
       return (6.5 * printJobCopies);
+    } else if (workflowType == IdCardWorkflowType.xerox) {
+      // Ordinary paper copy = ₹1.5 per card
+      return (1.5 * totalCardsCount * printJobCopies);
     } else if (workflowType == IdCardWorkflowType.epsonL805) {
       // PVC card blank = ₹12.0 each
       return (12.0 * totalCardsCount * printJobCopies);
@@ -202,7 +215,12 @@ class IdCardState {
     }
   }
 
-  double get calculatedInkCost => (3.0 * totalCardsCount * printJobCopies);
+  double get calculatedInkCost {
+    if (workflowType == IdCardWorkflowType.xerox) {
+      return (isBlackAndWhite ? 0.5 : 1.0) * totalCardsCount * printJobCopies;
+    }
+    return (isBlackAndWhite ? 1.5 : 3.0) * totalCardsCount * printJobCopies;
+  }
 
   double get calculatedEstimatedProfit => calculatedSellingPrice - calculatedMaterialCost - calculatedInkCost;
 
@@ -273,6 +291,7 @@ class IdCardState {
     L805Calibration? l805Calibration,
     PrintLayout? l805BackLayout,
     bool clearL805BackLayout = false,
+    bool? isBlackAndWhite,
   }) {
     return IdCardState(
       cards: cards ?? this.cards,
@@ -321,6 +340,7 @@ class IdCardState {
       card2BackBytes: clearCard2BackBytes ? null : (card2BackBytes ?? this.card2BackBytes),
       l805Calibration: l805Calibration ?? this.l805Calibration,
       l805BackLayout: clearL805BackLayout ? null : (l805BackLayout ?? this.l805BackLayout),
+      isBlackAndWhite: isBlackAndWhite ?? this.isBlackAndWhite,
     );
   }
 }
@@ -378,6 +398,7 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       pvcMode: state.pvcMode,
       l805CardQuantity: state.l805CardQuantity,
       l805PreviewFront: state.l805PreviewFront,
+      isBlackAndWhite: state.isBlackAndWhite,
     );
     final newUndo = [...state.undoStack, snapshot];
     if (newUndo.length > 20) newUndo.removeAt(0);
@@ -1911,6 +1932,16 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
         spacingMm: state.gapMm,
         showDragonCutLines: state.showDragonCutLines,
       );
+    } else if (state.workflowType == IdCardWorkflowType.xerox) {
+      layouts = LayoutEngine.calculateMultiXeroxLayoutPages(
+        paperPreset: state.paperPreset,
+        idPreset: state.idCardPreset,
+        cards: cardList,
+        orientation: state.orientation,
+        marginMm: state.marginMm,
+        gapMm: state.gapMm,
+        showCutLines: state.showDragonCutLines,
+      );
     } else {
       layouts = LayoutEngine.calculateMultiIdCardLayoutPages(
         paperPreset: state.paperPreset,
@@ -1951,6 +1982,11 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
       newPaper = StandardPaperPresets.fourR;
       newGapMm = 0.5;
       newMarginMm = 4.0;
+    } else if (type == IdCardWorkflowType.xerox) {
+      newPaper = StandardPaperPresets.a4;
+      newOrientation = PaperOrientation.portrait;
+      newGapMm = 6.0;
+      newMarginMm = 5.0;
     } else if (type == IdCardWorkflowType.epsonL805) {
       newPaper = StandardPaperPresets.a4;
       newOrientation = PaperOrientation.portrait;
@@ -2157,7 +2193,9 @@ class IdCardNotifier extends StateNotifier<IdCardState> {
                 ? 'Epson L805 Card Print'
                 : (state.workflowType == IdCardWorkflowType.dragonSheet
                     ? 'Dragon Sheet PVC Print'
-                    : state.idCardPreset.name),
+                    : (state.workflowType == IdCardWorkflowType.xerox
+                        ? 'ID Card Xerox Print'
+                        : state.idCardPreset.name)),
             paperName: '${state.paperPreset.name} ($totalPages Page${totalPages > 1 ? 's' : ''})',
             copiesCount: totalCards * state.printJobCopies,
             printerName: targetPrinter?.name ?? 'System Print Dialog',

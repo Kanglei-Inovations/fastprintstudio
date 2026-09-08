@@ -57,47 +57,68 @@ class CardFormatSelector extends StatelessWidget {
         ),
         const SizedBox(height: 8),
 
-        Row(
+        Column(
           children: [
-            // Mode 1: Lamination Card (Emerald Theme)
-            Expanded(
-              child: _buildWorkflowCard(
-                type: IdCardWorkflowType.photoPaperLamination,
-                title: 'Lamination Card',
-                price: '₹50',
-                subtitle: 'Fold & Laminate',
-                icon: Icons.photo_library_rounded,
-                accentColor: palette.green,
-                isSelected: workflowType == IdCardWorkflowType.photoPaperLamination,
-              ),
-            ),
-            const SizedBox(width: 6),
+            Row(
+              children: [
+                // Mode 1: Lamination Card (Emerald Theme)
+                Expanded(
+                  child: _buildWorkflowCard(
+                    type: IdCardWorkflowType.photoPaperLamination,
+                    title: 'Lamination Card',
+                    price: '₹50',
+                    subtitle: 'Fold & Laminate',
+                    icon: Icons.photo_library_rounded,
+                    accentColor: palette.green,
+                    isSelected: workflowType == IdCardWorkflowType.photoPaperLamination,
+                  ),
+                ),
+                const SizedBox(width: 6),
 
-            // Mode 2: Epson L805 Card (Royal Blue Theme)
-            Expanded(
-              child: _buildWorkflowCard(
-                type: IdCardWorkflowType.epsonL805,
-                title: 'Epson L805 Card',
-                price: '₹100',
-                subtitle: 'A4 PVC Tray',
-                icon: Icons.badge_rounded,
-                accentColor: palette.blue,
-                isSelected: workflowType == IdCardWorkflowType.epsonL805,
-              ),
+                // Mode 2: Epson L805 Card (Royal Blue Theme)
+                Expanded(
+                  child: _buildWorkflowCard(
+                    type: IdCardWorkflowType.epsonL805,
+                    title: 'Epson L805 Card',
+                    price: '₹100',
+                    subtitle: 'A4 PVC Tray',
+                    icon: Icons.badge_rounded,
+                    accentColor: palette.blue,
+                    isSelected: workflowType == IdCardWorkflowType.epsonL805,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 6),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                // Mode 3: Dragon Sheet (Vibrant Amber Theme)
+                Expanded(
+                  child: _buildWorkflowCard(
+                    type: IdCardWorkflowType.dragonSheet,
+                    title: 'Dragon Sheet',
+                    price: '₹100',
+                    subtitle: '200×300mm Sheet',
+                    icon: Icons.grid_view_rounded,
+                    accentColor: palette.orange,
+                    isSelected: workflowType == IdCardWorkflowType.dragonSheet,
+                  ),
+                ),
+                const SizedBox(width: 6),
 
-            // Mode 3: Dragon Sheet (Vibrant Amber Theme)
-            Expanded(
-              child: _buildWorkflowCard(
-                type: IdCardWorkflowType.dragonSheet,
-                title: 'Dragon Sheet',
-                price: '₹100',
-                subtitle: '200×300mm Sheet',
-                icon: Icons.grid_view_rounded,
-                accentColor: palette.orange,
-                isSelected: workflowType == IdCardWorkflowType.dragonSheet,
-              ),
+                // Mode 4: Xerox (Teal Theme - On last after Dragon Sheet)
+                Expanded(
+                  child: _buildWorkflowCard(
+                    type: IdCardWorkflowType.xerox,
+                    title: 'Xerox',
+                    price: '₹10',
+                    subtitle: 'Paper Copy',
+                    icon: Icons.copy_rounded,
+                    accentColor: palette.teal,
+                    isSelected: workflowType == IdCardWorkflowType.xerox,
+                  ),
+                ),
+              ],
             ),
           ],
         ),

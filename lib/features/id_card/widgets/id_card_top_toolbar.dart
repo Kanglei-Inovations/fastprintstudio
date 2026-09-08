@@ -149,7 +149,7 @@ class IdCardTopToolbar extends StatelessWidget {
               size: 18,
               color: canRedo ? palette.blue : palette.textMuted,
             ),
-            tooltip: 'Redo (Ctrl+Shift+Z)',
+            tooltip: 'Redo (Ctrl+Y / Ctrl+Shift+Z)',
             visualDensity: VisualDensity.compact,
           ),
 
@@ -173,39 +173,45 @@ class IdCardTopToolbar extends StatelessWidget {
           const SizedBox(width: 6),
 
           // 4. Open (Amber)
-          OutlinedButton.icon(
-            onPressed: onOpen,
-            icon: Icon(Icons.folder_open_rounded, size: 15, color: palette.orange),
-            label: Text(
-              'Open',
-              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.textPrimary),
-            ),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-              side: BorderSide(color: palette.cardBorder),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              backgroundColor: palette.cardBg,
+          Tooltip(
+            message: 'Open Document (Ctrl+O)',
+            child: OutlinedButton.icon(
+              onPressed: onOpen,
+              icon: Icon(Icons.folder_open_rounded, size: 15, color: palette.orange),
+              label: Text(
+                'Open',
+                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: palette.textPrimary),
+              ),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                side: BorderSide(color: palette.cardBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                backgroundColor: palette.cardBg,
+              ),
             ),
           ),
           const SizedBox(width: 6),
 
           // 5. Save Project (.fps) (Blue)
-          OutlinedButton.icon(
-            onPressed: hasSource ? onSaveProject : null,
-            icon: Icon(Icons.save_rounded, size: 15, color: hasSource ? palette.blue : palette.textMuted),
-            label: Text(
-              'Save .fps',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: hasSource ? palette.textPrimary : palette.textMuted,
+          Tooltip(
+            message: 'Save Project (Ctrl+S)',
+            child: OutlinedButton.icon(
+              onPressed: hasSource ? onSaveProject : null,
+              icon: Icon(Icons.save_rounded, size: 15, color: hasSource ? palette.blue : palette.textMuted),
+              label: Text(
+                'Save .fps',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: hasSource ? palette.textPrimary : palette.textMuted,
+                ),
               ),
-            ),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-              side: BorderSide(color: palette.cardBorder),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              backgroundColor: palette.cardBg,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                side: BorderSide(color: palette.cardBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                backgroundColor: palette.cardBg,
+              ),
             ),
           ),
           const SizedBox(width: 6),
@@ -224,40 +230,46 @@ class IdCardTopToolbar extends StatelessWidget {
           const SizedBox(width: 4),
 
           // 6. Export PDF (Red)
-          OutlinedButton.icon(
-            onPressed: hasSource && onExportPdf != null ? onExportPdf : null,
-            icon: Icon(Icons.picture_as_pdf_rounded, size: 15, color: hasSource ? palette.red : palette.textMuted),
-            label: Text(
-              'Export PDF',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: hasSource ? palette.textPrimary : palette.textMuted,
+          Tooltip(
+            message: 'Export PDF (Ctrl+E)',
+            child: OutlinedButton.icon(
+              onPressed: hasSource && onExportPdf != null ? onExportPdf : null,
+              icon: Icon(Icons.picture_as_pdf_rounded, size: 15, color: hasSource ? palette.red : palette.textMuted),
+              label: Text(
+                'Export PDF',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: hasSource ? palette.textPrimary : palette.textMuted,
+                ),
               ),
-            ),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-              side: BorderSide(color: palette.cardBorder),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              backgroundColor: palette.cardBg,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                side: BorderSide(color: palette.cardBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                backgroundColor: palette.cardBg,
+              ),
             ),
           ),
           const SizedBox(width: 10),
 
           // 7. Primary PRINT Action Button (Prominent Blue Gradient)
-          ElevatedButton.icon(
-            onPressed: hasSource ? onPrint : null,
-            icon: const Icon(Icons.print_rounded, size: 17, color: Colors.white),
-            label: const Text(
-              'Print (Ctrl+P)',
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: Colors.white),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: palette.blue,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-              elevation: 2,
-              shadowColor: palette.blue.withValues(alpha: 0.4),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
+          Tooltip(
+            message: 'Print Document (Ctrl+P)',
+            child: ElevatedButton.icon(
+              onPressed: hasSource ? onPrint : null,
+              icon: const Icon(Icons.print_rounded, size: 17, color: Colors.white),
+              label: const Text(
+                'Print (Ctrl+P)',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: Colors.white),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: palette.blue,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                elevation: 2,
+                shadowColor: palette.blue.withValues(alpha: 0.4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
+              ),
             ),
           ),
         ],

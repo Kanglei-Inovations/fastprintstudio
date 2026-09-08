@@ -73,7 +73,7 @@ class IdCardFileSelectorCard extends StatelessWidget {
             ),
             if (onAddCard != null)
               Tooltip(
-                message: 'Add more ID card / person',
+                message: 'Add more ID card / person (Ctrl+N)',
                 child: InkWell(
                   onTap: onAddCard,
                   borderRadius: BorderRadius.circular(6),

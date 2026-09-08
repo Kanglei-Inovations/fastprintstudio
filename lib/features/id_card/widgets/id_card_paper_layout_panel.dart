@@ -116,7 +116,7 @@ class IdCardPaperLayoutPanel extends StatelessWidget {
                       child: _buildStepperField(
                         icon: Icons.format_line_spacing_rounded,
                         accentColor: palette.teal,
-                        label: 'Spacing',
+                        label: workflowType == IdCardWorkflowType.xerox ? 'Card Gap' : 'Spacing',
                         value: gapMm,
                         step: 0.5,
                         min: 0.0,

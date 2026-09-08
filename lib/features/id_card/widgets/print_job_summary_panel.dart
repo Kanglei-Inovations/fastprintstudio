@@ -55,6 +55,7 @@ class PrintJobSummaryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLamination = workflowType == IdCardWorkflowType.photoPaperLamination;
+    final isXerox = workflowType == IdCardWorkflowType.xerox;
     final isL805 = workflowType == IdCardWorkflowType.epsonL805;
     final l805PagesCount = (hasBothSides && backCount > 0) ? 2 : 1;
 
@@ -103,13 +104,27 @@ class PrintJobSummaryPanel extends StatelessWidget {
                 _JobSpecRow(
                   palette: palette,
                   icon: Icons.precision_manufacturing_rounded,
-                  iconColor: isLamination ? palette.green : (isL805 ? palette.blue : palette.orange),
+                  iconColor: isLamination
+                      ? palette.green
+                      : (isXerox
+                          ? palette.teal
+                          : (isL805 ? palette.blue : palette.orange)),
                   label: 'Method',
                   value: isLamination
                       ? 'Lamination Card'
-                      : (isL805 ? 'Epson L805 Card' : 'Dragon Sheet'),
+                      : (isXerox
+                          ? 'Xerox'
+                          : (isL805 ? 'Epson L805 Card' : 'Dragon Sheet')),
                 ),
-                if (!isLamination && !isL805)
+                if (isXerox)
+                  _JobSpecRow(
+                    palette: palette,
+                    icon: Icons.copy_rounded,
+                    iconColor: palette.teal,
+                    label: 'Layout',
+                    value: hasBothSides ? 'Front + Back (2 cards/pair)' : 'Front Only',
+                  ),
+                if (!isLamination && !isL805 && !isXerox)
                   _JobSpecRow(
                     palette: palette,
                     icon: Icons.grid_view_rounded,

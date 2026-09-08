@@ -64,14 +64,18 @@ class PdfGenerator {
           layout.serviceType.toLowerCase().contains('l805') ||
           layout.paperPreset.id == 'l805_tray';
 
+      final isXerox = layout.serviceType.toLowerCase().contains('xerox');
+
       final isDragon = layout.showDragonCutLines &&
           !isL805 &&
+          !isXerox &&
           (layout.paperPreset.id == 'dragon_sheet_200x300' ||
               layout.serviceType.toLowerCase().contains('dragon'));
 
       final isLamination = layout.showDragonCutLines &&
           !isDragon &&
           !isL805 &&
+          !isXerox &&
           (layout.paperPreset.id == '4r' ||
               layout.paperPreset.id == 'four_r' ||
               layout.paperPreset.id == 'a4' ||

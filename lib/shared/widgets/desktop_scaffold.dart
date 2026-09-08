@@ -114,61 +114,151 @@ class _DesktopScaffoldState extends ConsumerState<DesktopScaffold> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header Logo & Branding
+          // Header Logo & Branding (Vertical Layout)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(
+              horizontal: _isSidebarCollapsed ? 8 : 16,
+              vertical: _isSidebarCollapsed ? 14 : 16,
+            ),
             decoration: const BoxDecoration(
               border: Border(bottom: BorderSide(color: Color(0xFF222836))),
             ),
-            child: ClipRect(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                physics: const NeverScrollableScrollPhysics(),
-                child: SizedBox(
-                  width: 198,
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
+            child: _isSidebarCollapsed
+                ? Center(
+                    child: Tooltip(
+                      message: AppConstants.appName,
+                      child: Container(
+                        width: 44,
+                        height: 44,
                         decoration: BoxDecoration(
-                          color: AppColors.primary,
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(11),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF00E5FF).withValues(alpha: 0.2),
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                        child: const Icon(Icons.print_rounded, color: Colors.white, size: 20),
-                      ),
-                      if (!_isSidebarCollapsed) ...[
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                AppConstants.appName,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: -0.3,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                'Xerox & Studio Pro',
-                                style: TextStyle(
-                                  color: AppColors.sidebarTextMuted,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(11),
+                          child: Image.asset(
+                            'assets/images/fastprint_logo.png',
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: AppColors.primary,
+                              child: const Icon(Icons.print_rounded, color: Colors.white, size: 22),
+                            ),
                           ),
                         ),
-                      ],
+                      ),
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Beautiful App Logo
+                      Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.15),
+                            width: 1.2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF00E5FF).withValues(alpha: 0.25),
+                              blurRadius: 16,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(13),
+                          child: Image.asset(
+                            'assets/images/fastprint_logo.png',
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: AppColors.primary,
+                              child: const Icon(Icons.print_rounded, color: Colors.white, size: 28),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 9),
+
+                      // App Name in Vertical Orientation
+                      const Text(
+                        'FASTPRINT',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.8,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            height: 1.5,
+                            width: 12,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Colors.transparent, Color(0xFF38BDF8)],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          const Text(
+                            'STUDIO',
+                            style: TextStyle(
+                              color: Color(0xFF38BDF8),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 2.5,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Container(
+                            height: 1.5,
+                            width: 12,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Color(0xFF38BDF8), Colors.transparent],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E293B),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: const Color(0xFF334155),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: const Text(
+                          'PRO PRINT SUITE',
+                          style: TextStyle(
+                            color: Color(0xFF94A3B8),
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
-                ),
-              ),
-            ),
           ),
 
           const SizedBox(height: 12),

@@ -932,6 +932,107 @@ class LayoutEngine {
     return layouts;
   }
 
+  /// Calculates multi-page layout for Xerox production method (Front + Back Paper Copy)
+  /// - Always keeps only 1 person ID card (Front and Back) on 1 sheet.
+  /// - Multiple files / persons generate multiple sheets (1 person per sheet).
+  /// - Places Front and Back vertically one below another in normal 0° orientation.
+  /// - Both cards have identical physical dimensions, width, height, aspect ratio, vertically aligned.
+  /// - Horizontally centered and vertically centered on the paper sheet.
+  /// - Preserves physical card dimensions (e.g. 85.6 x 54 mm for Aadhaar Card).
+  /// - Configurable vertical gap between Front & Back (gapMm).
+  /// - If "Include Back Side" is disabled (back is null or !hasBothSides), prints only Front.
+  /// - No borders and no cut dot lines (plain paper output).
+  static List<PrintLayout> calculateMultiXeroxLayoutPages({
+    required PaperPreset paperPreset,
+    required IDCardPreset idPreset,
+    required List<IdCardEntry> cards,
+    PaperOrientation orientation = PaperOrientation.portrait,
+    double marginMm = 5.0,
+    double gapMm = 6.0,
+    int dpi = 300,
+    bool showCutLines = false,
+  }) {
+    final validCards = cards.where((c) => c.frontBytes != null).toList();
+    if (validCards.isEmpty) return [];
+
+    final paperW = paperPreset.effectiveWidthMm(orientation);
+    final paperH = paperPreset.effectiveHeightMm(orientation);
+    final cardW = idPreset.widthMm;
+    final cardH = idPreset.heightMm;
+
+    final totalPages = validCards.length;
+    final layouts = <PrintLayout>[];
+
+    for (int p = 0; p < totalPages; p++) {
+      final card = validCards[p];
+      final items = <LayoutItem>[];
+
+      final hasBoth = card.hasBothSides && card.backBytes != null;
+      final firstImg = card.swapFrontBack && hasBoth ? card.backBytes! : card.frontBytes!;
+      final secondImg = card.swapFrontBack && hasBoth ? card.frontBytes! : card.backBytes;
+
+      final totalPersonH = (hasBoth && secondImg != null) ? ((cardH * 2) + gapMm) : cardH;
+      final startY = math.max(marginMm, (paperH - totalPersonH) / 2.0);
+      final centerX = math.max(marginMm, (paperW - cardW) / 2.0);
+
+      // Front Card (0° normal orientation)
+      items.add(
+        LayoutItem(
+          id: _uuid.v4(),
+          label: '${card.name} ${card.swapFrontBack ? "Back" : "Front"}',
+          imageBytes: firstImg,
+          xMm: centerX,
+          yMm: startY,
+          widthMm: cardW,
+          heightMm: cardH,
+          rotationDegrees: 0, // Explicitly 0° (normal, upright)
+          isFront: !card.swapFrontBack,
+          isBack: card.swapFrontBack,
+          groupId: card.id,
+          groupName: card.name,
+        ),
+      );
+
+      if (hasBoth && secondImg != null) {
+        // Back Card placed vertically below Front, separated by gapMm (0° normal orientation, NOT 180°)
+        items.add(
+          LayoutItem(
+            id: _uuid.v4(),
+            label: '${card.name} ${card.swapFrontBack ? "Front" : "Back"}',
+            imageBytes: secondImg,
+            xMm: centerX,
+            yMm: startY + cardH + gapMm,
+            widthMm: cardW,
+            heightMm: cardH,
+            rotationDegrees: 0, // Explicitly 0° (normal, NOT 180°)
+            isFront: card.swapFrontBack,
+            isBack: !card.swapFrontBack,
+            groupId: card.id,
+            groupName: card.name,
+          ),
+        );
+      }
+
+      final pageTitle = totalPages > 1
+          ? 'Xerox Copy (Sheet ${p + 1} of $totalPages)'
+          : 'Xerox (Front + Back Paper Copy)';
+
+      layouts.add(PrintLayout(
+        paperPreset: paperPreset,
+        orientation: orientation,
+        dpi: dpi,
+        marginMm: marginMm,
+        spacingMm: gapMm,
+        items: items,
+        serviceType: pageTitle,
+        maxCapacity: hasBoth ? 2 : 1,
+        showDragonCutLines: false, // Xerox has NO cut lines or borders
+      ));
+    }
+
+    return layouts;
+  }
+
   /// Calculates single-sheet layout for Dragon Sheet (200 x 300 mm)
   /// - Duplex mode: places pairs (Front & Back)
   /// - Single mode: places all fronts
